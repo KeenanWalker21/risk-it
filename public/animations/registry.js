@@ -6,11 +6,11 @@ const EVENT_ANIMATIONS = {
   DOUBLE_DOWN: { name: "Double Down", description: "Your next eligible reward is doubled.", priority: "MEDIUM", duration: 2600, animation: "double-down", sound: "doubleDown", fullscreen: false, blocksInput: false, supportsTarget: false, level: "major" },
   CASH_DROP: { name: "Cash Drop", description: "Bonus cash is in play.", priority: "MEDIUM", duration: 2600, animation: "cash-drop", sound: "cashDrop", fullscreen: false, blocksInput: false, supportsTarget: false, level: "major" },
   BANK_HEIST: { name: "Bank Heist", description: "Cash moves from one player to another.", priority: "HIGH", duration: 3200, animation: "bank-heist", sound: "heist", fullscreen: false, blocksInput: false, supportsTarget: true, level: "major" },
-  LIGHTNING: { name: "Lightning Round", description: "Get ready. The next round is faster.", priority: "HIGH", duration: 2800, animation: "lightning-round", sound: "lightning", fullscreen: false, blocksInput: false, supportsTarget: false, level: "major" },
+  LIGHTNING: { name: "Lightning Round", description: "3, 2, 1, go. The next round is faster.", priority: "HIGH", duration: 3600, animation: "lightning-round", sound: "lightning", fullscreen: false, blocksInput: false, supportsTarget: false, level: "major", media: { kind: "css" } },
   BOUNTY: { name: "Bounty", description: "A player is marked.", priority: "HIGH", duration: 2800, animation: "bounty", sound: "bounty", fullscreen: false, blocksInput: false, supportsTarget: true, level: "major" },
   STEAL: { name: "Steal Chance", description: "A steal is aimed at another player.", priority: "HIGH", duration: 3000, animation: "steal", sound: "steal", fullscreen: false, blocksInput: false, supportsTarget: true, level: "major" },
   CHAOS: { name: "Chaos Round", description: "A random supported effect was chosen.", priority: "CRITICAL", duration: 3800, animation: "chaos-round", sound: "chaos", fullscreen: true, blocksInput: true, level: "cinematic" },
-  FINAL_GAMBLE: { name: "Final Gamble", description: "The next wager swings twice as hard.", priority: "CRITICAL", duration: 4000, animation: "final-gamble", sound: "finalGamble", fullscreen: true, blocksInput: true, level: "cinematic" },
+  FINAL_GAMBLE: { name: "Final Gamble", description: "3, 2, 1. Then the wager swings twice as hard.", priority: "CRITICAL", duration: 4200, animation: "final-gamble", sound: "finalGamble", fullscreen: true, blocksInput: true, level: "cinematic", media: { kind: "css" } },
   JACKPOT: { name: "Jackpot", description: "The jackpot is live.", priority: "CRITICAL", duration: 4000, animation: "jackpot", sound: "jackpot", fullscreen: true, blocksInput: true, level: "cinematic" },
   KINGS_CROWN: { name: "King's Crown", description: "The leader wears the crown.", priority: "HIGH", duration: 3000, animation: "kings-crown", sound: "crown", fullscreen: false, blocksInput: false, supportsTarget: true, level: "major" },
   MARKET_CRASH: { name: "Market Crash", description: "Balances take a hit.", priority: "HIGH", duration: 2800, animation: "market-crash", sound: "crash", fullscreen: false, blocksInput: false, supportsTarget: false, level: "major" },
@@ -32,6 +32,16 @@ const EVENT_ANIMATIONS = {
   EVENT_UNAVAILABLE: { name: "Event Unavailable", description: "That action is not available.", priority: "LOW", duration: 900, animation: "failure", sound: "deny", fullscreen: false, blocksInput: false, supportsTarget: false, level: "small" },
   GAME_ALREADY_ENDED: { name: "Game Already Ended", description: "The shop is closed.", priority: "LOW", duration: 900, animation: "failure", sound: "deny", fullscreen: false, blocksInput: false, supportsTarget: false, level: "small" },
   NOT_YOUR_TURN: { name: "Not Your Turn", description: "That action is closed right now.", priority: "LOW", duration: 900, animation: "failure", sound: "deny", fullscreen: false, blocksInput: false, supportsTarget: false, level: "small" },
+  POWERUP_UNAVAILABLE: { name: "Powerup Unavailable", description: "That powerup did not activate.", priority: "LOW", duration: 900, animation: "failure", sound: "deny", fullscreen: false, blocksInput: false, supportsTarget: false, level: "small" },
+  POWER_SHIELD: { name: "Shield", description: "A shield is up.", priority: "MEDIUM", duration: 1800, animation: "protection", sound: "protect", fullscreen: false, blocksInput: false, supportsTarget: true, level: "major", media: { kind: "css" } },
+  POWER_SHIELD_BLOCK: { name: "Shield Blocked It", description: "The shield stopped the hit.", priority: "HIGH", duration: 2000, animation: "shield-break", sound: "protect", fullscreen: false, blocksInput: false, supportsTarget: true, level: "major", media: { kind: "css" } },
+  POWER_DOUBLE: { name: "Double Down", description: "The next reward is doubled.", priority: "MEDIUM", duration: 2200, animation: "double-down", sound: "doubleDown", fullscreen: false, blocksInput: false, supportsTarget: false, level: "major", media: { kind: "css" } },
+  POWER_HINT: { name: "Hint", description: "A clue was revealed.", priority: "MEDIUM", duration: 1600, animation: "buy-hint", sound: "hint", fullscreen: false, blocksInput: false, supportsTarget: false, level: "small", media: { kind: "css" } },
+  POWER_STEAL: { name: "Steal", description: "Cash moved between players.", priority: "HIGH", duration: 2200, animation: "steal", sound: "steal", fullscreen: false, blocksInput: false, supportsTarget: true, level: "major", media: { kind: "css" } },
+  POWER_RISK: { name: "Risk Boost", description: "The next winning wager pays more.", priority: "MEDIUM", duration: 2000, animation: "risk-boost", sound: "powerup", fullscreen: false, blocksInput: false, supportsTarget: false, level: "major", media: { kind: "css" } },
+  POWER_FREE_BET: { name: "Free Bet", description: "The next miss will not take the wager.", priority: "MEDIUM", duration: 2000, animation: "free-bet", sound: "powerup", fullscreen: false, blocksInput: false, supportsTarget: false, level: "major", media: { kind: "css" } },
+  POWER_EXTRA_LIFE: { name: "Extra Life", description: "A life was added.", priority: "HIGH", duration: 2000, animation: "extra-life", sound: "life", fullscreen: false, blocksInput: false, supportsTarget: false, level: "major", media: { kind: "css" } },
+  CASH_FLIGHT: { name: "Cash Moved", description: "Cash traveled between players.", priority: "LOW", duration: 1200, animation: "cash-gain", sound: "cash", fullscreen: false, blocksInput: false, supportsTarget: true, level: "small", media: { kind: "css" } },
 };
 
 const FAILURE_CODES = {
@@ -43,6 +53,10 @@ const FAILURE_CODES = {
   UNKNOWN_EVENT: "EVENT_UNAVAILABLE",
   DUPLICATE_PURCHASE: "EVENT_UNAVAILABLE",
   NOTHING_LEFT: "EVENT_UNAVAILABLE",
+  POWERUPS_OFF: "POWERUP_UNAVAILABLE",
+  POWERUP_UNAVAILABLE: "POWERUP_UNAVAILABLE",
+  NOT_OWNED: "POWERUP_UNAVAILABLE",
+  WRONG_MODE: "POWERUP_UNAVAILABLE",
 };
 
 function buildCue(input = {}, now = Date.now()) {
@@ -69,6 +83,7 @@ function buildCue(input = {}, now = Date.now()) {
     amount,
     timestamp: input.timestamp || now,
     metadata: input.metadata && typeof input.metadata === "object" ? { ...input.metadata } : {},
+    media: spec.media && spec.media.src ? { kind: spec.media.kind, src: spec.media.src } : { kind: spec.media?.kind || "css" },
   };
 }
 

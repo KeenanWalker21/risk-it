@@ -1,5 +1,6 @@
 "use strict";
 
+const powerups = require("./powerups");
 const HANGMAN_LIVES = [4, 6, 8];
 const HANGMAN_TIMES = [30, 45, 60, 90];
 const HANGMAN_MULTIPLIERS = [1, 2, 3];
@@ -202,7 +203,7 @@ function awardSolve(room, player) {
   room.puzzle.solvedCount = (room.puzzle.solvedCount || 0) + 1;
   player.puzzle.place = room.puzzle.solvedCount;
   player.puzzle.solved = true;
-  const reward = hangmanReward(player.puzzle.lives, room.settings);
+  const reward = powerups.scaleReward(player, hangmanReward(player.puzzle.lives, room.settings));
   player.change = reward;
   player.balance += reward;
   player.score += 1;
@@ -240,6 +241,7 @@ function attackLife(room, attacker, target) {
   if (!target.connected || !target.puzzle) return { ok: false, error: "INVALID_TARGET", message: "That player is not in this race." };
   if (target.puzzle.solved || target.puzzle.lives <= 0) return { ok: false, error: "INVALID_TARGET", message: "That player has no life left to take." };
   if (!spend(attacker, HANGMAN_COSTS.attack)) return { ok: false, error: "INSUFFICIENT_CASH", message: `You need $${HANGMAN_COSTS.attack} to remove a life.` };
+  if (powerups.absorb(room, target, "REMOVE_LIFE")) return { ok: true, blocked: true, message: `${target.name} blocked the attack.` };
   target.puzzle.lives -= 1;
   return { ok: true, message: `${attacker.name} removed a life from ${target.name}.` };
 }
@@ -310,6 +312,7 @@ function applyPurchasedEffect(room, player, eventId, target, randomInt) {
   if (eventId === "BANK_HEIST") {
     if (!target || target.id === player.id) return { ok: false, error: "INVALID_TARGET", message: "Choose another player to heist." };
     if (!target.connected || target.balance <= 0) return { ok: false, error: "INVALID_TARGET", message: "That player has no cash to take." };
+    if (powerups.absorb(room, target, "BANK_HEIST")) return { ok: true, blocked: true, message: `${target.name} blocked the heist.`, amount: 0, targetId: target.id, targetName: target.name };
     const amount = Math.min(150, Math.max(1, Math.floor(target.balance * 0.1)));
     const moved = Math.min(target.balance, amount);
     target.balance -= moved;
@@ -349,14 +352,14 @@ function purchaseEvent(room, player, eventId, target, randomInt) {
   return {
     ok: true,
     message: `${effect.message} $${player.balance.toLocaleString("en-US")} remaining.`,
-    cue: {
+    cue: effect.blocked ? null : {
       type: eventId,
       playerId: player.id,
       playerName: player.name,
       targetPlayerId: effect.targetId || null,
       targetName: effect.targetName || null,
       amount: Number.isFinite(effect.amount) ? effect.amount : null,
-      metadata: effect.metadata || {},
+      metadata: { ...(effect.metadata || {}), ...(eventId === "BANK_HEIST" && effect.amount ? { travel: "to-player" } : {}) },
       description: effect.message,
     },
   };

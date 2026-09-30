@@ -55,19 +55,35 @@
     return `${sign}$${Math.abs(amount).toLocaleString("en-US")}`;
   }
 
+  function mediaScene(cue) {
+    const media = cue.media;
+    if (!media?.src) return "";
+    const src = escapeHtml(media.src);
+    if (media.kind === "gif" || media.kind === "image" || media.kind === "svg") return `<img class="anim-media" alt="" src="${src}">`;
+    if (media.kind === "webm" || media.kind === "mp4" || media.kind === "video") return `<video class="anim-media" autoplay muted playsinline src="${src}"></video>`;
+    return "";
+  }
+
   function scene(cue) {
+    const external = mediaScene(cue);
+    if (external) return `<div class="anim-scene media">${external}</div>`;
     const kind = cue.animation;
     if (reduced) return `<div class="anim-scene calm" data-kind="${kind}"></div>`;
     if (kind === "cash-drop" || kind === "jackpot") return `<div class="anim-scene coins">${Array.from({ length: kind === "jackpot" ? 14 : 8 }, (_, i) => `<i style="--i:${i}"></i>`).join("")}</div>`;
     if (kind === "bank-heist") return `<div class="anim-scene vault"><b></b><b></b></div>`;
-    if (kind === "lightning-round" || kind === "risk-storm") return `<div class="anim-scene bolt"></div>`;
+    if (kind === "lightning-round") return `<div class="anim-scene countdown"><span>3</span><span>2</span><span>1</span><span>GO</span></div>`;
+    if (kind === "final-gamble") return `<div class="anim-scene countdown"><span>3</span><span>2</span><span>1</span><span>FINAL</span></div>`;
+    if (kind === "risk-storm") return `<div class="anim-scene bolt"></div>`;
     if (kind === "bounty") return `<div class="anim-scene crosshair"></div>`;
     if (kind === "double-down") return `<div class="anim-scene multiplier">2×</div>`;
     if (kind === "chaos-round") return `<div class="anim-scene chaos"><span>✦</span><span>⚡</span><span>◆</span></div>`;
     if (kind === "kings-crown") return `<div class="anim-scene crown">♛</div>`;
     if (kind === "steal" || kind === "cash-gain") return `<div class="anim-scene bills"><i></i><i></i><i></i></div>`;
     if (kind === "protection") return `<div class="anim-scene shield"></div>`;
-    if (kind === "final-gamble") return `<div class="anim-scene wager">ALL IN</div>`;
+    if (kind === "shield-break") return `<div class="anim-scene shield crack"></div>`;
+    if (kind === "risk-boost") return `<div class="anim-scene multiplier">1.5×</div>`;
+    if (kind === "free-bet") return `<div class="anim-scene wager">SAFE</div>`;
+    if (kind === "extra-life") return `<div class="anim-scene heart">+♥</div>`;
     if (kind === "buy-hint") return `<div class="anim-scene glass"></div>`;
     if (kind === "buy-letter") return `<div class="anim-scene tile">?</div>`;
     if (kind === "remove-life" || kind === "elimination") return `<div class="anim-scene heart">♥</div>`;
@@ -155,12 +171,34 @@
     floatTimer = setTimeout(showFloats, reduced ? 400 : 700);
   }
 
+  function flyCash(cue) {
+    if (cue.metadata?.travel !== "to-player" || !cue.playerId || !cue.targetPlayerId) return;
+    const from = document.querySelector(`[data-player="${CSS.escape(cue.targetPlayerId)}"]`);
+    const to = document.querySelector(`[data-player="${CSS.escape(cue.playerId)}"]`);
+    if (!from || !to || !root) return;
+    const start = from.getBoundingClientRect();
+    const end = to.getBoundingClientRect();
+    const chip = document.createElement("div");
+    chip.className = "cash-flight";
+    chip.textContent = money(cue.amount);
+    chip.style.left = `${start.left + start.width / 2}px`;
+    chip.style.top = `${start.top + start.height / 2}px`;
+    root.append(chip);
+    from.classList.add("flight-from");
+    to.classList.add("flight-to");
+    const dx = (end.left + end.width / 2) - (start.left + start.width / 2);
+    const dy = (end.top + end.height / 2) - (start.top + start.height / 2);
+    if (!reduced && chip.animate) chip.animate([{ transform: "translate(-50%, -50%)" }, { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))` }], { duration: 900, easing: "cubic-bezier(.2,.7,.2,1)", fill: "forwards" });
+    setTimeout(() => { chip.remove(); from.classList.remove("flight-from"); to.classList.remove("flight-to"); }, reduced ? 700 : 1000);
+  }
+
   function play(animation) {
     const cue = animation && animation.type ? animation : null;
     if (!cue || seen.has(cue.id)) return;
     seen.add(cue.id);
     if (seen.size > 40) seen.delete(seen.values().next().value);
     mount();
+    flyCash(cue);
     const result = queue.enqueue(cue);
     if (result.channel === "float") showFloats();
     else if (result.channel === "interrupt") showCurrent();

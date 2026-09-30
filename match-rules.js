@@ -2,6 +2,7 @@
 
 const crypto = require("node:crypto");
 const hangman = require("./hangman");
+const powerups = require("./powerups");
 
 const MODES = [
   ["CLASSIC", "Classic Risk It", "Answer questions, wager your cash, and finish with the biggest bankroll."],
@@ -92,6 +93,7 @@ function defaultSettings(questionCount) {
     hangmanPurchases: true,
     hangmanAttacks: true,
     cashEventsEnabled: true,
+    powerupsEnabled: true,
   };
 }
 
@@ -134,7 +136,8 @@ function isCustomMatch(settings) {
     || settings.hangmanWords !== 3
     || settings.hangmanPurchases === false
     || settings.hangmanAttacks === false
-    || settings.cashEventsEnabled === false;
+    || settings.cashEventsEnabled === false
+    || settings.powerupsEnabled === false;
 }
 
 function listPlayers(room) {
@@ -296,7 +299,7 @@ function applyOneEvent(room, eventId, randomInt) {
     state.detail = joinDetail(state.detail, "Correct answers pay 2×.");
   } else if (eventId === "MARKET_CRASH") {
     for (const player of players) {
-      if (player.balance > 0) player.balance = Math.floor(player.balance * 0.85);
+      if (player.balance > 0 && !powerups.absorb(room, player, "MARKET_CRASH")) player.balance = Math.floor(player.balance * 0.85);
     }
     state.detail = joinDetail(state.detail, "The market dropped. Everyone lost 15%.");
   } else if (eventId === "CASH_DROP") {
@@ -304,7 +307,7 @@ function applyOneEvent(room, eventId, randomInt) {
     state.detail = joinDetail(state.detail, "Everyone still in the game received $250.");
   } else if (eventId === "TAX_COLLECTOR") {
     const leader = richest(players);
-    if (leader) {
+    if (leader && !powerups.absorb(room, leader, "TAX_COLLECTOR")) {
       const loss = Math.min(leader.balance, Math.max(1, Math.floor(leader.balance * 0.15)));
       leader.balance -= loss;
     }
@@ -422,6 +425,7 @@ function preparePlayers(players, settings, randomInt = defaultRandomInt) {
     player.pendingDouble = false;
     player.pendingDrop = 0;
     player.pendingGamble = false;
+    powerups.resetPlayer(player);
   }
   const teams = settings.gameMode === "TEAM_BATTLE" ? { A: { balance: settings.startingCash }, B: { balance: settings.startingCash } } : null;
   if (teams) {
@@ -451,6 +455,7 @@ function markRoundParticipation(room) {
     player.change = 0;
     player.satOut = !open && (player.balance || 0) <= 0 && room.settings?.eliminateAtZero !== false;
     player.eliminated = player.satOut;
+    powerups.clearRoundHints(player);
   }
 }
 
@@ -472,13 +477,14 @@ function chooseAuctionBidder(room) {
   room.roundState.title = room.roundState.title || "Auction";
 }
 
-function transfer(from, to, amount) {
+function transfer(from, to, amount, room) {
   const moved = Math.min(from.balance, Math.max(0, amount));
   if (!moved) return 0;
   from.balance -= moved;
   to.balance += moved;
   from.change -= moved;
   to.change += moved;
+  powerups.noteFlight(room, from, to, moved);
   return moved;
 }
 
@@ -499,8 +505,8 @@ function scoreRound(room, randomInt = defaultRandomInt) {
       player.change = 0;
       if (right) player.score += 1;
       if (winner && player.id === winner.id) {
-        player.change = state.jackpotAmount;
-        player.balance += state.jackpotAmount;
+        player.change = powerups.adjustDelta(player, { won: true, wager: 0, delta: state.jackpotAmount, mode });
+        player.balance += player.change;
         player.eliminated = false;
         player.satOut = false;
       }
@@ -530,7 +536,7 @@ function scoreRound(room, randomInt = defaultRandomInt) {
       const won = bidder.answer === question.correctAnswer;
       const wager = bidder.bet || 0;
       bidder.correct = won;
-      bidder.change = won ? Math.round(wager * (state.payoutMultiplier || 1)) : -wager;
+      bidder.change = powerups.adjustDelta(bidder, { won, wager, delta: won ? Math.round(wager * (state.payoutMultiplier || 1)) : -wager, mode });
       bidder.balance = Math.max(0, bidder.balance + bidder.change);
       if (won) bidder.score += 1;
     }
@@ -555,6 +561,7 @@ function scoreRound(room, randomInt = defaultRandomInt) {
       if (won && player.pendingDouble) { delta *= 2; player.pendingDouble = false; }
       if (won && player.pendingDrop) { delta += player.pendingDrop; player.pendingDrop = 0; }
       if (player.pendingGamble && wager > 0 && mode !== "SUDDEN_DEATH") { delta *= 2; player.pendingGamble = false; }
+      delta = powerups.adjustDelta(player, { won, wager, delta, mode });
       player.correct = won;
       player.change = delta;
       player.balance = Math.max(0, (player.balance || 0) + delta);
@@ -568,29 +575,30 @@ function scoreRound(room, randomInt = defaultRandomInt) {
   }
 
   for (const player of players) {
+    if ((player.balance || 0) <= 0 && powerups.saveFromZero(player, mode)) continue;
     if ((player.balance || 0) <= 0 && room.settings?.eliminateAtZero !== false) player.eliminated = true;
   }
-  resolveSidePayouts(players, state, randomInt);
+  resolveSidePayouts(room, players, state, randomInt);
   awardClosingPot(room, players, randomInt);
 }
 
-function resolveSidePayouts(players, state, randomInt) {
-  if (state.heist) moveIfCorrect(players, state.heist, 0.15);
-  if (state.steal) moveIfCorrect(players, state.steal, 0.1);
+function resolveSidePayouts(room, players, state, randomInt) {
+  if (state.heist) moveIfCorrect(room, players, state.heist, 0.15, "BANK_HEIST");
+  if (state.steal) moveIfCorrect(room, players, state.steal, 0.1, "STEAL");
   if (state.bountyId) {
     const leader = players.find((player) => player.id === state.bountyId);
     const winners = players.filter((player) => player.id !== state.bountyId && player.correct);
-    if (leader && !leader.correct && winners.length) {
-      transfer(leader, winners[randomInt(winners.length)], Math.max(1, Math.floor(leader.balance * 0.1)));
+    if (leader && !leader.correct && winners.length && !powerups.absorb(room, leader, "BOUNTY")) {
+      transfer(leader, winners[randomInt(winners.length)], Math.max(1, Math.floor(leader.balance * 0.1)), room);
     }
   }
 }
 
-function moveIfCorrect(players, plan, rate) {
+function moveIfCorrect(room, players, plan, rate, effectId) {
   const thief = players.find((player) => player.id === plan.thiefId);
   const victim = players.find((player) => player.id === plan.victimId);
-  if (!thief?.correct || !victim) return;
-  transfer(victim, thief, Math.max(1, Math.floor(victim.balance * rate)));
+  if (!thief?.correct || !victim || powerups.absorb(room, victim, effectId)) return;
+  transfer(victim, thief, Math.max(1, Math.floor(victim.balance * rate)), room);
 }
 
 function awardClosingPot(room, players, randomInt) {
@@ -619,7 +627,7 @@ function anyoneCanPlay(room) {
   return listPlayers(room).some((player) => player.connected && ((player.balance || 0) > 0 || room.roundState?.openToAll));
 }
 
-const SETTING_KEYS = ["startingCash", "questionCount", "gameMode", "difficulty", "betSeconds", "questionSeconds", "resultsSeconds", "eliminateAtZero", "categories", "questionTypes", "events", "hangmanLives", "hangmanSeconds", "hangmanDifficulty", "hangmanCategories", "hangmanRewardMultiplier", "hangmanWords", "hangmanPurchases", "hangmanAttacks", "cashEventsEnabled"];
+const SETTING_KEYS = ["startingCash", "questionCount", "gameMode", "difficulty", "betSeconds", "questionSeconds", "resultsSeconds", "eliminateAtZero", "categories", "questionTypes", "events", "hangmanLives", "hangmanSeconds", "hangmanDifficulty", "hangmanCategories", "hangmanRewardMultiplier", "hangmanWords", "hangmanPurchases", "hangmanAttacks", "cashEventsEnabled", "powerupsEnabled"];
 const DISPLAY_KEYS = ["isCustom", "modeLabel"];
 
 function applySettingsUpdate(current, updates, limits) {
@@ -662,6 +670,7 @@ function applySettingsUpdate(current, updates, limits) {
   if (Object.hasOwn(updates, "hangmanPurchases") && typeof updates.hangmanPurchases !== "boolean") return { ok: false, message: "Hangman purchases must be on or off." };
   if (Object.hasOwn(updates, "hangmanAttacks") && typeof updates.hangmanAttacks !== "boolean") return { ok: false, message: "Hangman attacks must be on or off." };
   if (Object.hasOwn(updates, "cashEventsEnabled") && typeof updates.cashEventsEnabled !== "boolean") return { ok: false, message: "Cash-powered events must be on or off." };
+  if (Object.hasOwn(updates, "powerupsEnabled") && typeof updates.powerupsEnabled !== "boolean") return { ok: false, message: "Powerups must be on or off." };
   if (Object.hasOwn(updates, "hangmanCategories")) {
     if (!Array.isArray(updates.hangmanCategories) || updates.hangmanCategories.some((category) => !hangman.HANGMAN_CATEGORIES.includes(category))) return { ok: false, message: "Choose Hangman categories from the word list." };
     next.hangmanCategories = [...new Set(updates.hangmanCategories)];
@@ -673,7 +682,7 @@ function applySettingsUpdate(current, updates, limits) {
       next.events[key] = value;
     }
   }
-  for (const key of ["startingCash", "questionCount", "difficulty", "betSeconds", "questionSeconds", "resultsSeconds", "eliminateAtZero", "hangmanLives", "hangmanSeconds", "hangmanDifficulty", "hangmanRewardMultiplier", "hangmanWords", "hangmanPurchases", "hangmanAttacks", "cashEventsEnabled"]) {
+  for (const key of ["startingCash", "questionCount", "difficulty", "betSeconds", "questionSeconds", "resultsSeconds", "eliminateAtZero", "hangmanLives", "hangmanSeconds", "hangmanDifficulty", "hangmanRewardMultiplier", "hangmanWords", "hangmanPurchases", "hangmanAttacks", "cashEventsEnabled", "powerupsEnabled"]) {
     if (Object.hasOwn(updates, key)) next[key] = updates[key];
   }
   return { ok: true, settings: next };

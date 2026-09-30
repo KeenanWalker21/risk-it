@@ -31,3 +31,14 @@ button:disabled,.hm-key:disabled,.shop-card:disabled{opacity:.45;cursor:not-allo
 .lobby-wrap,.final-wrap{padding-bottom:96px}
 .game-content{padding-bottom:96px}
 .chat-panel{max-width:280px}
+.power-tray{margin-top:14px;padding:12px;border:1px solid #2b303a;border-radius:6px;background:#10141c}
+.power-grid,.power-tray .shop-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin-top:8px}
+.power-card{text-align:left;background:#151a22;border:1px solid #2b303a;color:#e8ebf0;border-radius:4px;padding:10px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.power-card b{width:28px;height:28px;display:grid;place-items:center;border:1px solid #c8f169;color:#c8f169;font:11px var(--mono)}
+.power-card strong{font-size:13px}.power-card span,.power-tray p{color:#9aa1ad;font-size:12px;line-height:1.4;margin:0}
+.power-card em{color:#ffb4a8;font-style:normal;font:11px var(--mono)}
+.leader-row.shielded{box-shadow:inset 3px 0 0 #8fd0ff}
+.leader-row.flight-from{outline:1px solid #ff8d79}
+.leader-row.flight-to{outline:1px solid #c8f169}
+.answer-btn.eliminated{opacity:.45;text-decoration:line-through}
+.cash-flight{position:fixed;z-index:33;transform:translate(-50%,-50%);color:#0c1018;background:#c8f169;border-radius:99px;padding:4px 8px;font:12px 'DM Mono',monospace;pointer-events:none}

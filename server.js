@@ -7,6 +7,7 @@ const { createChatGuard } = require('./chat-filter');
 const { createAccountStore } = require('./accounts');
 const rules = require('./match-rules');
 const hangman = require('./hangman');
+const powerups = require('./powerups');
 const animations = require('./public/animations/registry');
 
 const PORT = Number(process.env.PORT || 3000);
@@ -44,7 +45,7 @@ function publicRoom(room, viewerId) {
     code: room.code, phase: room.phase, round: room.round, totalRounds: room.settings.gameMode === 'HANGMAN' ? (room.settings.hangmanWords || 3) : room.settings.questionCount,
     deadline: room.deadline, serverNow: Date.now(), hostId: room.hostId, viewerId,
     settings: { ...room.settings, categories: [...(room.settings.categories || [])], questionTypes: [...(room.settings.questionTypes || [])], hangmanCategories: [...(room.settings.hangmanCategories || [])], events: { ...room.settings.events }, isCustom: rules.isCustomMatch(room.settings), modeLabel: rules.modeLabel(room.settings.gameMode) },
-    players: sortedPlayers(room).map(p => ({ id: p.id, name: p.name, balance: p.balance, score: p.score, connected: p.connected, ready: p.connected, isHost: p.id === room.hostId, spectating: !!p.satOut, eliminated: !!p.eliminated, team: p.team || null, lives: p.puzzle?.lives ?? null, maxLives: p.puzzle?.maxLives ?? null, solvedWord: !!p.puzzle?.solved, placement: p.puzzle?.place ?? null, hasBet: p.bet !== null, hasAnswered: p.answer !== null, bet: p.id === viewerId ? p.bet : undefined, answer: room.phase === 'RESULTS' ? p.answer : undefined, correct: room.phase === 'RESULTS' ? p.correct : undefined, change: room.phase === 'RESULTS' ? p.change : undefined })),
+    players: sortedPlayers(room).map(p => ({ id: p.id, name: p.name, balance: p.balance, score: p.score, connected: p.connected, ready: p.connected, isHost: p.id === room.hostId, spectating: !!p.satOut, eliminated: !!p.eliminated, team: p.team || null, shielded: (p.armed?.shield || 0) > 0, lives: p.puzzle?.lives ?? null, maxLives: p.puzzle?.maxLives ?? null, solvedWord: !!p.puzzle?.solved, placement: p.puzzle?.place ?? null, hasBet: p.bet !== null, hasAnswered: p.answer !== null, bet: p.id === viewerId ? p.bet : undefined, answer: room.phase === 'RESULTS' ? p.answer : undefined, correct: room.phase === 'RESULTS' ? p.correct : undefined, change: room.phase === 'RESULTS' ? p.change : undefined })),
     question: q && room.phase !== 'BETTING' ? { id: q.id, question: q.question, answers: q.answers, category: q.category, difficulty: q.difficulty } : (q ? { category: q.category, difficulty: q.difficulty } : null),
     result: room.phase === 'RESULTS' && q ? { correctAnswer: q.correctAnswer, correctText: q.answers[q.correctAnswer] } : null,
     winnerId: room.phase === 'FINAL' ? sortedPlayers(room)[0]?.id : null,
@@ -56,6 +57,7 @@ function publicRoom(room, viewerId) {
     privateNote,
     viewerHangman: hangman.viewerHangman(room, viewer),
     shop: viewer ? hangman.shopOffers(viewer, room.settings, room.phase) : [],
+    powerups: viewer ? powerups.publicView(viewer, room) : null,
     chat: room.chat || [],
     lastEvent: room.lastEvent || null
   };
@@ -93,6 +95,23 @@ function roundCue(room) {
   }
   cue(room, input);
 }
+function flushPowerupCues(room) {
+  for (const block of room.shieldLog || []) {
+    cue(room, { type: 'POWER_SHIELD_BLOCK', playerId: block.playerId, playerName: block.playerName, description: `${block.playerName} blocked it.` });
+  }
+  room.shieldLog = [];
+  for (const flight of room.cashFlights || []) {
+    cue(room, {
+      type: 'CASH_FLIGHT', playerId: flight.toId, playerName: flight.toName, targetPlayerId: flight.fromId, targetName: flight.fromName,
+      amount: flight.amount, metadata: { travel: 'to-player' }, description: `${flight.toName} took $${flight.amount} from ${flight.fromName}.`,
+    });
+  }
+  room.cashFlights = [];
+  for (const scored of rules.listPlayers(room)) {
+    for (const note of scored.resolvedPowerups || []) cue(room, { type: note.type, playerId: scored.id, playerName: scored.name, amount: note.amount, description: note.description });
+    scored.resolvedPowerups = [];
+  }
+}
 function connectedPlayers(room) { return [...room.players.values()].filter(p => p.connected); }
 function enterPhase(room, phase, seconds) {
   clearTimeout(room.timer); room.phase = phase; room.deadline = Date.now() + seconds * 1000;
@@ -117,6 +136,7 @@ function startRound(room) {
     const keepLightning = room.roundState.lightning;
     if (!rules.applyEvent(room, eventId)) { room.roundState = rules.blankRoundState(); room.roundState.lightning = keepLightning; }
     else roundCue(room);
+    flushPowerupCues(room);
   }
   rules.markRoundParticipation(room);
   if (!rules.anyoneCanPlay(room)) return finishGame(room);
@@ -135,6 +155,7 @@ function advance(room) {
     enterPhase(room, 'QUESTION', clock.question); event(room, 'QUESTION_STARTED', { round: room.round });
   } else if (room.phase === 'QUESTION') {
     rules.scoreRound(room);
+    flushPowerupCues(room);
     for (const scored of rules.listPlayers(room)) {
       if (!scored.change) continue;
       const jackpotWin = room.roundState?.jackpotAmount && scored.change === room.roundState.jackpotAmount && scored.correct;
@@ -289,6 +310,7 @@ function handleMessage(socket, raw) {
     const updated = rules.applySettingsUpdate(room.settings, msg.settings, { startingCash: STARTING_CASH_OPTIONS, questionCount: QUESTION_COUNT_OPTIONS });
     if (!updated.ok) return reject(socket, 'INVALID_SETTINGS', updated.message);
     room.settings = updated.settings;
+    if (room.settings.powerupsEnabled === false) powerups.clearPlayers(room);
     event(room, 'SETTINGS_UPDATED', { settings: { ...room.settings, isCustom: rules.isCustomMatch(room.settings) } }); return;
   }
   if (msg.type === 'KICK') {
@@ -337,10 +359,11 @@ function handleMessage(socket, raw) {
     const who = { playerId: player.id, playerName: player.name };
     if (msg.type === 'HANGMAN_HINT') cue(room, { ...who, type: 'BUY_HINT' });
     if (msg.type === 'HANGMAN_LETTER') cue(room, { ...who, type: 'BUY_LETTER' });
-    if (msg.type === 'HANGMAN_ATTACK' && target) {
+    if (msg.type === 'HANGMAN_ATTACK' && target && !result.blocked) {
       cue(room, { ...who, type: 'REMOVE_LIFE', targetPlayerId: target.id, targetName: target.name });
       if (target.puzzle?.lives <= 0) cue(room, { type: 'ELIMINATED', playerId: target.id, playerName: target.name });
     }
+    flushPowerupCues(room);
     if (result.solved) cue(room, { ...who, type: 'WORD_SOLVED', amount: result.reward, metadata: { place: result.place } });
     else if (msg.type === 'HANGMAN_GUESS' && result.lives === 0) cue(room, { ...who, type: 'ELIMINATED' });
     if (room.phase === 'HANGMAN' && hangman.hangmanSettled(room)) advance(room);
@@ -352,6 +375,23 @@ function handleMessage(socket, raw) {
     if (!result.ok) return reject(socket, result.error, result.message);
     event(room, 'EVENT_PURCHASED', { message: result.message });
     if (result.cue) cue(room, result.cue);
+    flushPowerupCues(room);
+    return;
+  }
+  if (msg.type === 'BUY_POWERUP') {
+    const result = powerups.purchase(room, player, msg.powerupId);
+    if (!result.ok) return reject(socket, result.error, result.message);
+    event(room, 'POWERUP_PURCHASED', { message: result.message });
+    return;
+  }
+  if (msg.type === 'ACTIVATE_POWERUP') {
+    const target = typeof msg.targetId === 'string' ? room.players.get(msg.targetId) : null;
+    const result = powerups.activate(room, player, msg.powerupId, target, (max) => crypto.randomInt(max));
+    if (!result.ok) return reject(socket, result.error, result.message);
+    event(room, 'POWERUP_ACTIVATED', { message: result.message });
+    if (result.privateMessage) send(socket, { type: 'NOTICE', message: result.privateMessage });
+    if (result.cue) cue(room, result.cue);
+    flushPowerupCues(room);
     return;
   }
   if (msg.type === 'CHAT') {
