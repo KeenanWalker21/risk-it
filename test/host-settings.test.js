@@ -30,7 +30,13 @@ test('lobby settings synchronize, lock at start, and kicked clients cannot rejoi
   await Promise.all([host.open,guest.open,kickHost.open,victim.open]);
   host.send('CREATE',{name:'Host'});const hostRoom=await host.next(m=>m.type==='WELCOME');
   guest.send('JOIN',{name:'Guest',code:hostRoom.room.code});const guestRoom=await guest.next(m=>m.type==='WELCOME');
-  assert.deepEqual(hostRoom.room.settings,{startingCash:1000,questionCount:1,gameMode:'CLASSIC',isCustom:true});
+  assert.equal(hostRoom.room.settings.startingCash,1000);
+  assert.equal(hostRoom.room.settings.questionCount,1);
+  assert.equal(hostRoom.room.settings.gameMode,'CLASSIC');
+  assert.equal(hostRoom.room.settings.difficulty,'ANY');
+  assert.equal(hostRoom.room.settings.events.JACKPOT,true);
+  assert.equal(hostRoom.room.settings.events.REVIVAL,true);
+  assert.equal(hostRoom.room.settings.isCustom,true);
   guest.send('UPDATE_SETTINGS',{settings:{startingCash:2500}});
   assert.equal((await guest.next(m=>m.type==='ERROR')).code,'NOT_HOST');
   host.send('UPDATE_SETTINGS',{settings:{startingCash:2500}});
@@ -39,7 +45,7 @@ test('lobby settings synchronize, lock at start, and kicked clients cannot rejoi
   host.send('UPDATE_SETTINGS',{settings:{questionCount:5}});
   const roundState=await guest.next(m=>m.type==='STATE'&&m.room.settings.questionCount===5);
   assert.equal(roundState.room.totalRounds,5);
-  host.send('UPDATE_SETTINGS',{settings:{gameMode:'SUDDEN_DEATH'}});
+  host.send('UPDATE_SETTINGS',{settings:{gameMode:'NOT_A_MODE'}});
   assert.equal((await host.next(m=>m.type==='ERROR')).code,'INVALID_SETTINGS');
   host.send('START');
   const started=await host.next(m=>m.type==='STATE'&&m.room.phase==='BETTING');

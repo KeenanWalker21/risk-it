@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const { questions } = require('./questions');
 const { createChatGuard } = require('./chat-filter');
 const { createAccountStore } = require('./accounts');
+const rules = require('./match-rules');
 
 const PORT = Number(process.env.PORT || 3000);
 const FAST_TEST = process.env.NODE_ENV !== 'production' && process.env.RISKIT_TEST_FAST === '1';
@@ -15,7 +16,7 @@ const ROUNDS = FAST_TEST ? 1 : 10;
 const MAX_PLAYERS = 12;
 const STARTING_CASH_OPTIONS = [500, 1000, 2500, 5000, 10000];
 const QUESTION_COUNT_OPTIONS = FAST_TEST ? [1, 5, 10, 15, 20, 25] : [5, 10, 15, 20, 25];
-const DEFAULT_SETTINGS = { startingCash: 1000, questionCount: ROUNDS, gameMode: 'CLASSIC' };
+const DEFAULT_SETTINGS = rules.defaultSettings(ROUNDS);
 const rooms = new Map();
 const clients = new Set();
 let accountStore = null;
@@ -30,19 +31,27 @@ function roomCode() {
   return code;
 }
 function sortedPlayers(room) { return [...room.players.values()].sort((a, b) => b.balance - a.balance || a.name.localeCompare(b.name)); }
-function customMatch(settings) {
-  return settings.startingCash !== 1000 || settings.questionCount !== 10 || settings.gameMode !== 'CLASSIC';
-}
 function publicRoom(room, viewerId) {
   const q = room.question;
+  const viewer = room.players.get(viewerId);
+  const letters = ['A', 'B', 'C', 'D'];
+  const privateNote = viewer?.role === 'IMPOSTER' && room.phase === 'QUESTION' && q
+    ? `Imposter intel: ${letters[q.correctAnswer]}. ${q.answers[q.correctAnswer]}`
+    : null;
   return {
     code: room.code, phase: room.phase, round: room.round, totalRounds: room.settings.questionCount,
     deadline: room.deadline, serverNow: Date.now(), hostId: room.hostId, viewerId,
-    settings: { ...room.settings, isCustom: customMatch(room.settings) },
-    players: sortedPlayers(room).map(p => ({ id: p.id, name: p.name, balance: p.balance, score: p.score, connected: p.connected, ready: p.connected, isHost: p.id === room.hostId, hasBet: p.bet !== null, hasAnswered: p.answer !== null, bet: p.id === viewerId ? p.bet : undefined, answer: room.phase === 'RESULTS' ? p.answer : undefined, correct: room.phase === 'RESULTS' ? p.correct : undefined, change: room.phase === 'RESULTS' ? p.change : undefined })),
+    settings: { ...room.settings, categories: [...(room.settings.categories || [])], events: { ...room.settings.events }, isCustom: rules.isCustomMatch(room.settings), modeLabel: rules.modeLabel(room.settings.gameMode) },
+    players: sortedPlayers(room).map(p => ({ id: p.id, name: p.name, balance: p.balance, score: p.score, connected: p.connected, ready: p.connected, isHost: p.id === room.hostId, spectating: !!p.satOut, eliminated: !!p.eliminated, team: p.team || null, hasBet: p.bet !== null, hasAnswered: p.answer !== null, bet: p.id === viewerId ? p.bet : undefined, answer: room.phase === 'RESULTS' ? p.answer : undefined, correct: room.phase === 'RESULTS' ? p.correct : undefined, change: room.phase === 'RESULTS' ? p.change : undefined })),
     question: q && room.phase !== 'BETTING' ? { id: q.id, question: q.question, answers: q.answers, category: q.category, difficulty: q.difficulty } : (q ? { category: q.category, difficulty: q.difficulty } : null),
-    result: room.phase === 'RESULTS' ? { correctAnswer: q.correctAnswer, correctText: q.answers[q.correctAnswer] } : null,
+    result: room.phase === 'RESULTS' && q ? { correctAnswer: q.correctAnswer, correctText: q.answers[q.correctAnswer] } : null,
     winnerId: room.phase === 'FINAL' ? sortedPlayers(room)[0]?.id : null,
+    roundEvent: rules.eventNotice(room.roundState, room.phase),
+    pot: room.pot || 0,
+    clues: (room.clues || []).slice(-6),
+    viewerWagers: viewer && room.phase === 'BETTING' ? rules.allowedWagers(viewer, room) : [],
+    viewerCanAnswer: !!(viewer && room.phase === 'QUESTION' && rules.mayAnswer(viewer, room)),
+    privateNote,
     chat: room.chat || [],
     lastEvent: room.lastEvent || null
   };
@@ -52,41 +61,67 @@ function broadcast(room) {
   for (const player of room.players.values()) if (player.socket && !player.socket.closed) send(player.socket, { type: 'STATE', room: publicRoom(room, player.id) });
 }
 function event(room, type, detail = {}) { room.lastEvent = { type, ...detail }; broadcast(room); }
-function chooseQuestion(room) {
-  let pool = questions.filter(q => !room.usedQuestions.has(q.id));
-  if (!pool.length) { room.usedQuestions.clear(); pool = questions; }
-  const q = pool[crypto.randomInt(pool.length)]; room.usedQuestions.add(q.id); return q;
-}
 function connectedPlayers(room) { return [...room.players.values()].filter(p => p.connected); }
 function enterPhase(room, phase, seconds) {
   clearTimeout(room.timer); room.phase = phase; room.deadline = Date.now() + seconds * 1000;
   room.timer = setTimeout(() => advance(room), seconds * 1000); room.timer.unref?.();
 }
+function finishGame(room) {
+  clearTimeout(room.timer); room.phase = 'FINAL'; room.deadline = null; event(room, 'GAME_FINISHED');
+}
+function dealQuestion(room) {
+  if (!questions.some(question => !room.usedQuestions.has(question.id))) room.usedQuestions.clear();
+  const pool = rules.questionPool(questions, room.usedQuestions, room.settings, room.round);
+  const picked = pool[crypto.randomInt(pool.length)];
+  room.usedQuestions.add(picked.id);
+  room.question = picked;
+}
 function startRound(room) {
-  room.round += 1; room.question = chooseQuestion(room);
-  for (const p of room.players.values()) { p.bet = null; p.answer = null; p.correct = null; p.change = 0; }
-  enterPhase(room, 'BETTING', BET_SECONDS); event(room, 'ROUND_STARTED', { round: room.round });
+  room.round += 1;
+  room.roundState = rules.blankRoundState();
+  if (room.lightningLeft > 0) { room.roundState.lightning = true; room.lightningLeft -= 1; }
+  const eventId = rules.pickEventId(room.settings, { round: room.round, totalRounds: room.settings.questionCount, fast: FAST_TEST, force: process.env.RISKIT_FORCE_EVENT || '' });
+  if (eventId) {
+    const keepLightning = room.roundState.lightning;
+    if (!rules.applyEvent(room, eventId)) { room.roundState = rules.blankRoundState(); room.roundState.lightning = keepLightning; }
+  }
+  rules.markRoundParticipation(room);
+  if (!rules.anyoneCanPlay(room)) return finishGame(room);
+  dealQuestion(room);
+  rules.lockForcedBets(room);
+  const clock = rules.timings(room.settings, room.roundState, FAST_TEST);
+  if (room.roundState.skipBetting) { enterPhase(room, 'QUESTION', clock.question); event(room, 'QUESTION_STARTED', { round: room.round }); return; }
+  enterPhase(room, 'BETTING', clock.betting); event(room, 'ROUND_STARTED', { round: room.round });
+  const needed = rules.listPlayers(room).filter(player => player.connected && !player.satOut && player.balance > 0);
+  if (needed.length && needed.every(player => player.bet !== null)) advance(room);
 }
 function advance(room) {
   if (room.phase === 'BETTING') {
-    enterPhase(room, 'QUESTION', QUESTION_SECONDS); event(room, 'QUESTION_STARTED', { round: room.round });
+    rules.chooseAuctionBidder(room);
+    const clock = rules.timings(room.settings, room.roundState, FAST_TEST);
+    enterPhase(room, 'QUESTION', clock.question); event(room, 'QUESTION_STARTED', { round: room.round });
   } else if (room.phase === 'QUESTION') {
-    for (const p of room.players.values()) {
-      const wager = p.bet || 0;
-      p.correct = p.answer !== null && p.answer === room.question.correctAnswer;
-      p.change = p.correct ? wager : -wager;
-      p.balance = Math.max(0, p.balance + p.change);
-      if (p.correct) p.score += 1;
-    }
-    enterPhase(room, 'RESULTS', RESULTS_SECONDS); event(room, 'ROUND_ENDED', { round: room.round });
+    rules.scoreRound(room);
+    const clock = rules.timings(room.settings, room.roundState, FAST_TEST);
+    enterPhase(room, 'RESULTS', clock.results); event(room, 'ROUND_ENDED', { round: room.round });
   } else if (room.phase === 'RESULTS') {
-    if (room.round >= room.settings.questionCount) { clearTimeout(room.timer); room.phase = 'FINAL'; room.deadline = null; event(room, 'GAME_FINISHED'); }
+    if (room.round >= room.settings.questionCount || rules.eliminationEndsMatch(room)) finishGame(room);
     else startRound(room);
   }
 }
 function finishEarlyIfReady(room) {
-  if (room.phase === 'BETTING' && connectedPlayers(room).every(p => p.bet !== null)) advance(room);
-  if (room.phase === 'QUESTION' && connectedPlayers(room).every(p => p.answer !== null)) advance(room);
+  const players = rules.listPlayers(room);
+  if (room.phase === 'BETTING') {
+    const needed = players.filter(player => player.connected && !player.satOut && player.balance > 0);
+    if (needed.length && needed.every(player => player.bet !== null)) advance(room);
+  } else if (room.phase === 'QUESTION') {
+    const needed = players.filter(player => rules.mayAnswer(player, room));
+    if (!needed.length || needed.every(player => player.answer !== null)) advance(room);
+  }
+}
+function resetMatch(room) {
+  const prepared = rules.preparePlayers(room.players.values(), room.settings);
+  room.teams = prepared.teams; room.pot = prepared.pot; room.clues = prepared.clues; room.lightningLeft = 0; room.round = 0; room.roundState = null; room.usedQuestions.clear();
 }
 function validClientId(value) { return typeof value === 'string' && /^[a-f0-9-]{32,36}$/i.test(value) ? value : null; }
 function reject(socket, code, message) { send(socket, { type: 'ERROR', code, message }); }
@@ -144,7 +179,7 @@ function handleMessage(socket, raw) {
     if (socket.roomCode && socket.playerId) disconnect(socket, true);
     const code = roomCode(), playerId = id(), token = id(), clientId = validClientId(msg.clientId) || id();
     const player = { id: playerId, token, clientId, name, userId: socket.account?.id || null, balance: DEFAULT_SETTINGS.startingCash, score: 0, connected: true, bet: null, answer: null, correct: null, change: 0, socket };
-    const room = { code, phase: 'LOBBY', round: 0, deadline: null, hostId: playerId, players: new Map([[playerId, player]]), kickedTokens: new Set(), kickedClientIds: new Set(), settings: { ...DEFAULT_SETTINGS }, usedQuestions: new Set(), question: null, chat: [], chatGuard: createChatGuard(), lastEvent: null };
+    const room = { code, phase: 'LOBBY', round: 0, deadline: null, hostId: playerId, players: new Map([[playerId, player]]), kickedTokens: new Set(), kickedClientIds: new Set(), settings: { ...DEFAULT_SETTINGS, categories: [...DEFAULT_SETTINGS.categories], events: { ...DEFAULT_SETTINGS.events } }, usedQuestions: new Set(), question: null, chat: [], chatGuard: createChatGuard(), pot: 0, clues: [], teams: null, lightningLeft: 0, roundState: null, lastEvent: null };
     rooms.set(code, room); socket.playerId = playerId; socket.roomCode = code;
     send(socket, { type: 'WELCOME', token, playerId, clientId, room: publicRoom(room, playerId) }); return;
   }
@@ -178,19 +213,18 @@ function handleMessage(socket, raw) {
     if (player.id !== room.hostId) return reject(socket, 'NOT_HOST', 'Only the host can start the game.');
     if (room.phase !== 'LOBBY') return reject(socket, 'WRONG_PHASE', 'The game has already started.');
     if (connectedPlayers(room).length < 2) return reject(socket, 'NEED_PLAYERS', 'At least two connected players are needed.');
-    for (const p of room.players.values()) { p.balance = room.settings.startingCash; p.score = 0; }
+    if (room.settings.gameMode === 'HEAD_TO_HEAD' && connectedPlayers(room).length !== 2) return reject(socket, 'NEED_PLAYERS', 'Head-to-Head needs exactly two connected players.');
+    resetMatch(room);
     event(room, 'GAME_STARTED'); startRound(room); return;
   }
   if (msg.type === 'UPDATE_SETTINGS') {
     if (player.id !== room.hostId) return reject(socket, 'NOT_HOST', 'Only the host can change game settings.');
     if (room.phase !== 'LOBBY') return reject(socket, 'SETTINGS_LOCKED', 'Game settings lock when the game starts.');
     if (!msg.settings || typeof msg.settings !== 'object' || Array.isArray(msg.settings)) return reject(socket, 'INVALID_SETTINGS', 'Choose valid game settings.');
-    const updates = msg.settings;
-    if (!Object.keys(updates).length || Object.keys(updates).some(key => !['startingCash', 'questionCount'].includes(key))) return reject(socket, 'INVALID_SETTINGS', 'One or more settings are not supported.');
-    if (Object.hasOwn(updates, 'startingCash') && !STARTING_CASH_OPTIONS.includes(updates.startingCash)) return reject(socket, 'INVALID_SETTINGS', 'Choose a supported starting balance.');
-    if (Object.hasOwn(updates, 'questionCount') && !QUESTION_COUNT_OPTIONS.includes(updates.questionCount)) return reject(socket, 'INVALID_SETTINGS', 'Choose a supported number of questions.');
-    room.settings = { ...room.settings, ...updates };
-    event(room, 'SETTINGS_UPDATED', { settings: { ...room.settings, isCustom: customMatch(room.settings) } }); return;
+    const updated = rules.applySettingsUpdate(room.settings, msg.settings, { startingCash: STARTING_CASH_OPTIONS, questionCount: QUESTION_COUNT_OPTIONS });
+    if (!updated.ok) return reject(socket, 'INVALID_SETTINGS', updated.message);
+    room.settings = updated.settings;
+    event(room, 'SETTINGS_UPDATED', { settings: { ...room.settings, isCustom: rules.isCustomMatch(room.settings) } }); return;
   }
   if (msg.type === 'KICK') {
     if (player.id !== room.hostId) return reject(socket, 'NOT_HOST', 'Only the host can remove players.');
@@ -206,18 +240,21 @@ function handleMessage(socket, raw) {
   if (msg.type === 'PLAY_AGAIN') {
     if (player.id !== room.hostId) return reject(socket, 'NOT_HOST', 'Only the host can start another game.');
     if (room.phase !== 'FINAL') return reject(socket, 'WRONG_PHASE', 'The current game is not finished.');
-    for (const p of room.players.values()) { p.balance = room.settings.startingCash; p.score = 0; p.bet = null; p.answer = null; p.correct = null; p.change = 0; }
-    room.usedQuestions.clear(); room.round = 0; event(room, 'GAME_RESTARTED'); startRound(room); return;
+    resetMatch(room); event(room, 'GAME_RESTARTED'); startRound(room); return;
   }
   if (msg.type === 'BET') {
     if (room.phase !== 'BETTING') return reject(socket, 'WRONG_PHASE', 'Betting is closed.');
     if (player.bet !== null) return reject(socket, 'BET_LOCKED', 'Your bet is already locked.');
-    const amount = msg.amount;
-    if (!Number.isInteger(amount) || amount < 0 || amount > player.balance || (amount > 0 && ![50, 100, 250, 500].includes(amount) && amount !== player.balance)) return reject(socket, 'INVALID_BET', 'Choose a listed bet or an all-in amount within your balance.');
-    player.bet = amount; event(room, 'PLAYER_BET', { playerName: player.name }); finishEarlyIfReady(room); return;
+    if (room.settings.gameMode === 'TEAM_BATTLE' && rules.listPlayers(room).some(mate => mate.team === player.team && mate.bet !== null)) return reject(socket, 'BET_LOCKED', 'Your team wager is already locked.');
+    const wager = rules.validateLiveBet(player, room, msg.amount);
+    if (!wager.ok) return reject(socket, wager.error, wager.message);
+    if (room.settings.gameMode === 'TEAM_BATTLE') { for (const mate of rules.listPlayers(room)) if (mate.team === player.team) mate.bet = wager.amount; }
+    else player.bet = wager.amount;
+    event(room, 'PLAYER_BET', { playerName: player.name }); finishEarlyIfReady(room); return;
   }
   if (msg.type === 'ANSWER') {
     if (room.phase !== 'QUESTION') return reject(socket, 'WRONG_PHASE', 'The question is not accepting answers.');
+    if (!rules.mayAnswer(player, room)) return reject(socket, player.satOut ? 'SPECTATING' : 'NOT_BIDDER', player.satOut ? 'You are out of cash and can only spectate.' : 'Only the high bidder can answer this question.');
     if (player.answer !== null) return reject(socket, 'ANSWER_LOCKED', 'Your answer is already locked.');
     if (!Number.isInteger(msg.answer) || msg.answer < 0 || msg.answer > 3) return reject(socket, 'INVALID_ANSWER', 'Choose one of the four answers.');
     player.answer = msg.answer; event(room, 'PLAYER_ANSWERED', { playerName: player.name }); finishEarlyIfReady(room); return;
