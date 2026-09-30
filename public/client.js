@@ -18,7 +18,18 @@
     });
     socket.addEventListener('message', ev => {
       let data; try { data = JSON.parse(ev.data); } catch { return; }
-      if (data.type === 'ERROR') { if (data.code === 'KICKED') { kickedOut(data.message); return; } if (data.code === 'INVALID_SETTINGS') settingsNotice = data.message; notify(data.message); if (data.code === 'ROOM_NOT_FOUND') { autoReconnect = false; } if (data.code === 'INVALID_SETTINGS' && room?.phase === 'LOBBY') render(); return; }
+      if (data.type === 'ERROR') {
+        if (data.code === 'KICKED') { kickedOut(data.message); return; }
+        if (data.code === 'INVALID_SETTINGS') settingsNotice = data.message;
+        notify(data.message);
+        if ((data.code === 'ROOM_NOT_FOUND' || data.code === 'GAME_IN_PROGRESS') && !room) {
+          autoReconnect = false;
+          if (data.code === 'ROOM_NOT_FOUND') { store.del('token'); store.del('playerId'); store.del('roomCode'); token = null; playerId = null; roomCode = null; }
+          showHome();
+        }
+        if (data.code === 'INVALID_SETTINGS' && room?.phase === 'LOBBY') render();
+        return;
+      }
       if (data.type === 'KICKED') { kickedOut(data.message); return; }
       if (data.type === 'ACCOUNT') {
         accountUser = data.user; accountMode = 'hidden';
@@ -36,6 +47,7 @@
       }
       if (data.type === 'WELCOME') {
         settingsNotice = '';
+        clearTimeout(toastTimer); toast.classList.remove('show');
         autoReconnect = true;
         token = data.token; playerId = data.playerId; roomCode = data.room.code;
         clientId = data.clientId || clientId;
@@ -79,8 +91,6 @@
   function showHome() {
     room = null;
     app.innerHTML = `<section class="home-shell"><header class="topbar"><a class="brand" href="/"><span class="brand-mark">R</span><span>RISK<span class="brand-light"> IT</span></span></a><span class="top-note"><i></i> LIVE TRIVIA, HIGHER STAKES</span></header><div class="hero"><div class="hero-copy"><div class="eyebrow"><span>THE GAME OF</span> KNOWING WHEN TO RISK IT</div><h1>Know it.<br><em>Bet on it.</em></h1><p>Ten questions. One shot at the top. Put your money where your mind is.</p><div class="hero-tags"><span>✦ &nbsp;2–12 players</span><span>◷ &nbsp;10 quick rounds</span><span>♢ &nbsp;Play for bragging rights</span></div></div><div class="entry-card"><div class="card-kicker">JUMP INTO THE ACTION</div><h2>Ready to risk it?</h2>${accountBox()}<label class="field-label" for="player-name">YOUR NAME</label><input id="player-name" maxlength="18" placeholder="What should we call you?" autocomplete="nickname" value="${esc(playerName)}"><button class="button button-primary full" id="create-btn"><span>CREATE A GAME</span><span>↗</span></button><div class="divider"><span>OR JOIN YOUR CREW</span></div><label class="field-label" for="room-code">ROOM CODE</label><div class="join-row"><input id="room-code" maxlength="6" placeholder="E.G. X7K92A" autocomplete="off"><button class="button button-secondary" id="join-btn">JOIN <span>→</span></button></div><p class="entry-error" id="entry-error" aria-live="polite"></p></div></div><footer class="home-footer"><span>GOOD INSTINCTS. QUESTIONABLE BETS.</span><span>PLAY AS A GUEST, OR SAVE YOUR NAME.</span></footer></section>`;
-    document.querySelector('#create-btn').onclick = () => { const name = cleanName(); if (name) startCreate(name); };
-    document.querySelector('#join-btn').onclick = () => { const name = cleanName(); const code = document.querySelector('#room-code').value.trim(); if (!name) return; if (code.length !== 6) { entryError('Enter a 6-character room code.'); return; } startJoin(name, code); };
     document.querySelector('#room-code').addEventListener('input', e => e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,''));
     for (const selector of ['#player-name','#room-code']) document.querySelector(selector).addEventListener('keydown', e => { if (e.key === 'Enter') (selector === '#player-name' ? document.querySelector('#create-btn') : document.querySelector('#join-btn')).click(); });
     bindAccount();
@@ -180,7 +190,20 @@
     autoReconnect=false; send('LEAVE'); store.del('token');store.del('playerId');store.del('roomCode');token=null;playerId=null;roomCode=null;room=null;
     if(socket&&socket.readyState===WebSocket.OPEN)socket.close(); showHome();
   }
-  document.addEventListener('click',e=>{if(e.target?.id==='create-btn'||e.target?.id==='join-btn'){} });
-  if (roomCode && token) { autoReconnect=true; connect(); }
-  else { if (sessionToken) connect(); showHome(); }
+  document.addEventListener('click', event => {
+    const create = event.target.closest?.('#create-btn');
+    const join = event.target.closest?.('#join-btn');
+    if (!create && !join) return;
+    const name = cleanName();
+    if (!name) return;
+    if (create) startCreate(name);
+    else {
+      const code = document.querySelector('#room-code').value.trim();
+      if (code.length !== 6) { entryError('Enter a 6-character room code.'); return; }
+      startJoin(name, code);
+    }
+  });
+  showHome();
+  if (roomCode && token) { autoReconnect = true; connect(); }
+  else if (sessionToken) connect();
 })();
