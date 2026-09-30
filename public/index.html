@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090b10"><title>RISK IT — Trivia, with a little more on the line</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main id="app"><section class="home-shell">
+    <header class="topbar"><a class="brand" href="/"><span class="brand-mark">R</span><span>RISK<span class="brand-light"> IT</span></span></a><span class="top-note"><i></i> LIVE TRIVIA, HIGHER STAKES</span></header>
+    <div class="hero"><div class="hero-copy"><div class="eyebrow"><span>THE GAME OF</span> KNOWING WHEN TO RISK IT</div><h1>Know it.<br><em>Bet on it.</em></h1><p>Ten questions. One shot at the top. Put your money where your mind is.</p><div class="hero-tags"><span>✦ &nbsp;2–12 players</span><span>◷ &nbsp;10 quick rounds</span><span>♢ &nbsp;Play for bragging rights</span></div></div>
+      <div class="entry-card"><div class="card-kicker">JUMP INTO THE ACTION</div><h2>Ready to risk it?</h2><label class="field-label" for="player-name">YOUR NAME</label><input id="player-name" maxlength="18" placeholder="What should we call you?" autocomplete="nickname">
+        <button class="button button-primary full" id="create-btn"><span>CREATE A GAME</span><span>↗</span></button>
+        <div class="divider"><span>OR JOIN YOUR CREW</span></div><label class="field-label" for="room-code">ROOM CODE</label><div class="join-row"><input id="room-code" maxlength="6" placeholder="E.G. X7K92A" autocomplete="off"><button class="button button-secondary" id="join-btn">JOIN <span>→</span></button></div><p class="entry-error" id="entry-error" aria-live="polite"></p>
+      </div></div>
+    <footer class="home-footer"><span>GOOD INSTINCTS. QUESTIONABLE BETS.</span><span>NO ACCOUNTS. JUST FRIENDS &amp; FORTUNE.</span></footer>
+  </section></main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/client.js" defer></script>
+</body>
+</html>
