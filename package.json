@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js",
-    "test": "node --test test/multiplayer.test.js test/reconnect.test.js test/review.test.js test/host-settings.test.js test/chat.test.js test/accounts.test.js test/modes-events.test.js test/lobby-settings-validation.test.js questions.test.js game-logic.test.js"
+    "test": "node --test test/multiplayer.test.js test/reconnect.test.js test/review.test.js test/host-settings.test.js test/chat.test.js test/accounts.test.js test/modes-events.test.js test/lobby-settings-validation.test.js test/hangman.test.js questions.test.js game-logic.test.js"
   },
   "engines": { "node": ">=22" }
 }

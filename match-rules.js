@@ -1,23 +1,25 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const hangman = require("./hangman");
 
 const MODES = [
-  ["CLASSIC", "Classic Risk It", "Answer questions, wager money, and finish with the most cash."],
-  ["LAST_STANDING", "Last Player Standing", "Players are eliminated at $0. The last player with cash wins."],
-  ["SPEED", "Speed Risk", "Shorter betting and answer timers for a fast game."],
-  ["SUDDEN_DEATH", "Sudden Death", "One wrong answer wipes your balance."],
-  ["HIGH_ROLLER", "High Roller", "Start with a large bankroll and bigger wagers."],
-  ["SURVIVAL", "Survival", "Questions get harder. Stay alive as long as you can."],
-  ["HEAD_TO_HEAD", "Head-to-Head", "Exactly two players. Wagers are more aggressive."],
-  ["TEAM_BATTLE", "Team Battle", "Two teams share a bankroll and answer together."],
-  ["IMPOSTER", "Imposter", "One player secretly sees the answer and plays for the win."],
-  ["COMEBACK", "Comeback", "Players behind the leader earn double on a correct answer."],
-  ["JACKPOT", "Jackpot", "A shared pot grows and is awarded on the final question."],
-  ["REVERSE", "Reverse Risk", "On even rounds you win the wager by answering wrong."],
-  ["AUCTION", "Auction", "The highest bid earns the only chance to answer."],
-  ["TREASURE", "Treasure Hunt", "Correct answers add clues and build a final prize."],
-  ["CUSTOM", "Custom Match", "The host sets cash, length, timers, difficulty, and events."],
+  ["CLASSIC", "Classic Risk It", "Answer questions, wager your cash, and finish with the biggest bankroll."],
+  ["LAST_STANDING", "Last Player Standing", "Survive by protecting your cash. Hit $0 and you're eliminated."],
+  ["SPEED", "Speed Risk", "Fast questions, short timers, and rapid-fire betting."],
+  ["SUDDEN_DEATH", "Sudden Death", "One major mistake can eliminate you. Every decision matters."],
+  ["HIGH_ROLLER", "High Roller", "Start rich, wager big, and risk massive amounts of cash."],
+  ["SURVIVAL", "Survival", "Keep answering correctly as the questions become harder."],
+  ["HEAD_TO_HEAD", "Head-to-Head", "Two players compete directly for the biggest bankroll."],
+  ["TEAM_BATTLE", "Team Battle", "Work together with your team and build the largest team bankroll."],
+  ["IMPOSTER", "Imposter", "One or more players have a hidden objective. Find out who is different."],
+  ["COMEBACK", "Comeback", "Players behind get powerful opportunities to make a comeback."],
+  ["JACKPOT", "Jackpot", "Build the jackpot and fight to claim it."],
+  ["REVERSE", "Reverse Risk", "Predict when you'll be wrong and turn mistakes into opportunities."],
+  ["AUCTION", "Auction", "Bid for the chance to answer valuable questions."],
+  ["TREASURE", "Treasure Hunt", "Solve questions and clues to reach the final prize."],
+  ["HANGMAN", "Hangman", "Race to solve the hidden word. Save lives to earn more cash."],
+  ["CUSTOM", "Custom Match", "Create your own Risk It rules, modes, questions, events, and powerups."],
 ];
 
 const MODE_ALIASES = { SPRINT: "SPEED", HIGH_STAKES: "HIGH_ROLLER" };
@@ -46,6 +48,15 @@ const EVENT_LABELS = Object.fromEntries(EVENTS);
 
 const DIFFICULTIES = ["ANY", "EASY", "MEDIUM", "HARD"];
 const CATEGORIES = ["General Knowledge", "Science", "History", "Sports", "Technology", "Entertainment", "Geography"];
+const QUESTION_TYPES = [
+  ["WHO", "Who"],
+  ["WHAT", "What"],
+  ["WHICH", "Which"],
+  ["WHERE", "Where"],
+  ["WHEN", "When"],
+  ["HOW_MANY", "How many"],
+];
+const QUESTION_TYPE_IDS = QUESTION_TYPES.map(([id]) => id);
 const BET_TIMES = [3, 5, 10, 15];
 const QUESTION_TIMES = [5, 7, 15, 20, 30];
 const RESULT_TIMES = [3, 5];
@@ -70,7 +81,17 @@ function defaultSettings(questionCount) {
     resultsSeconds: 5,
     eliminateAtZero: true,
     categories: [],
+    questionTypes: [],
     events: defaultEvents(),
+    hangmanLives: 6,
+    hangmanSeconds: 60,
+    hangmanDifficulty: "ANY",
+    hangmanCategories: [],
+    hangmanRewardMultiplier: 1,
+    hangmanWords: 3,
+    hangmanPurchases: true,
+    hangmanAttacks: true,
+    cashEventsEnabled: true,
   };
 }
 
@@ -103,7 +124,17 @@ function isCustomMatch(settings) {
     || settings.resultsSeconds !== 5
     || settings.eliminateAtZero === false
     || (settings.categories || []).length > 0
-    || !isStandardEvents(settings.events);
+    || (settings.questionTypes || []).length > 0
+    || !isStandardEvents(settings.events)
+    || settings.hangmanLives !== 6
+    || settings.hangmanSeconds !== 60
+    || settings.hangmanDifficulty !== "ANY"
+    || (settings.hangmanCategories || []).length > 0
+    || settings.hangmanRewardMultiplier !== 1
+    || settings.hangmanWords !== 3
+    || settings.hangmanPurchases === false
+    || settings.hangmanAttacks === false
+    || settings.cashEventsEnabled === false;
 }
 
 function listPlayers(room) {
@@ -122,20 +153,35 @@ function desiredDifficulty(settings, round) {
   return settings.difficulty;
 }
 
-function questionPool(questions, used, settings, round) {
+function questionKind(question) {
+  const text = String(question?.question || "").trim().toLowerCase();
+  if (/^who\b/.test(text)) return "WHO";
+  if (/^how many\b|^how often\b|^how much\b/.test(text)) return "HOW_MANY";
+  if (/^when\b|^in which year\b|\bwhich year\b/.test(text)) return "WHEN";
+  if (/\bwhich country\b|\bwhich continent\b|\bcapital of\b|^where\b|\blocated in which\b|\blies off the coast\b/.test(text)) return "WHERE";
+  if (/^which\b|^on which\b|^in which\b/.test(text)) return "WHICH";
+  return "WHAT";
+}
+
+function matchesQuestion(question, settings, round) {
   const difficulty = desiredDifficulty(settings, round);
   const categories = settings.categories || [];
-  const unused = questions.filter((question) => !used.has(question.id));
-  let pool = unused.length ? unused : questions;
-  if (difficulty) {
-    const narrowed = pool.filter((question) => String(question.difficulty).toUpperCase() === difficulty);
-    if (narrowed.length) pool = narrowed;
-  }
-  if (categories.length) {
-    const narrowed = pool.filter((question) => categories.includes(question.category));
-    if (narrowed.length) pool = narrowed;
-  }
-  return pool;
+  const types = settings.questionTypes || [];
+  if (difficulty && String(question.difficulty).toUpperCase() !== difficulty) return false;
+  if (categories.length && !categories.includes(question.category)) return false;
+  if (types.length && !types.includes(questionKind(question))) return false;
+  return true;
+}
+
+function questionPool(questions, used, settings, round) {
+  const ranked = [
+    questions.filter((question) => matchesQuestion(question, settings, round)),
+    (settings.categories || []).length ? questions.filter((question) => matchesQuestion(question, { ...settings, questionTypes: [] }, round)) : [],
+    (settings.questionTypes || []).length ? questions.filter((question) => matchesQuestion(question, { ...settings, categories: [] }, round)) : [],
+    questions,
+  ].find((pool) => pool.length) || questions;
+  const fresh = ranked.filter((question) => !used.has(question.id));
+  return fresh.length ? fresh : ranked;
 }
 
 function timings(settings, roundState, fast) {
@@ -372,6 +418,10 @@ function preparePlayers(players, settings, randomInt = defaultRandomInt) {
     player.answer = null;
     player.correct = null;
     player.change = 0;
+    player.puzzle = null;
+    player.pendingDouble = false;
+    player.pendingDrop = 0;
+    player.pendingGamble = false;
   }
   const teams = settings.gameMode === "TEAM_BATTLE" ? { A: { balance: settings.startingCash }, B: { balance: settings.startingCash } } : null;
   if (teams) {
@@ -502,6 +552,9 @@ function scoreRound(room, randomInt = defaultRandomInt) {
       if (mode === "SUDDEN_DEATH" && !won && player.connected && !player.satOut) delta = -(player.balance || 0);
       else if (!won && player.answer === null && wager === 0) delta = 0;
       else delta = won ? Math.round(wager * multiplier) : -wager;
+      if (won && player.pendingDouble) { delta *= 2; player.pendingDouble = false; }
+      if (won && player.pendingDrop) { delta += player.pendingDrop; player.pendingDrop = 0; }
+      if (player.pendingGamble && wager > 0 && mode !== "SUDDEN_DEATH") { delta *= 2; player.pendingGamble = false; }
       player.correct = won;
       player.change = delta;
       player.balance = Math.max(0, (player.balance || 0) + delta);
@@ -566,13 +619,13 @@ function anyoneCanPlay(room) {
   return listPlayers(room).some((player) => player.connected && ((player.balance || 0) > 0 || room.roundState?.openToAll));
 }
 
-const SETTING_KEYS = ["startingCash", "questionCount", "gameMode", "difficulty", "betSeconds", "questionSeconds", "resultsSeconds", "eliminateAtZero", "categories", "events"];
+const SETTING_KEYS = ["startingCash", "questionCount", "gameMode", "difficulty", "betSeconds", "questionSeconds", "resultsSeconds", "eliminateAtZero", "categories", "questionTypes", "events", "hangmanLives", "hangmanSeconds", "hangmanDifficulty", "hangmanCategories", "hangmanRewardMultiplier", "hangmanWords", "hangmanPurchases", "hangmanAttacks", "cashEventsEnabled"];
 const DISPLAY_KEYS = ["isCustom", "modeLabel"];
 
 function applySettingsUpdate(current, updates, limits) {
   if (!updates || typeof updates !== "object" || Array.isArray(updates)) return { ok: false, message: "Choose valid game settings." };
   const keys = Object.keys(updates).filter((key) => !DISPLAY_KEYS.includes(key));
-  const next = { ...current, categories: [...(current.categories || [])], events: { ...(current.events || defaultEvents()) } };
+  const next = { ...current, categories: [...(current.categories || [])], questionTypes: [...(current.questionTypes || [])], hangmanCategories: [...(current.hangmanCategories || [])], events: { ...(current.events || defaultEvents()) } };
   if (!keys.length) return { ok: true, settings: next };
   const unknown = keys.filter((key) => !SETTING_KEYS.includes(key));
   if (unknown.length) return { ok: false, message: `These settings are not supported: ${unknown.join(", ")}.` };
@@ -597,6 +650,22 @@ function applySettingsUpdate(current, updates, limits) {
     if (!Array.isArray(updates.categories) || updates.categories.some((category) => !CATEGORIES.includes(category))) return { ok: false, message: "Choose categories from the question bank." };
     next.categories = [...new Set(updates.categories)];
   }
+  if (Object.hasOwn(updates, "questionTypes")) {
+    if (!Array.isArray(updates.questionTypes) || updates.questionTypes.some((type) => !QUESTION_TYPE_IDS.includes(type))) return { ok: false, message: "Choose a supported question type." };
+    next.questionTypes = [...new Set(updates.questionTypes)];
+  }
+  if (Object.hasOwn(updates, "hangmanLives") && !hangman.HANGMAN_LIVES.includes(updates.hangmanLives)) return { ok: false, message: "Choose 4, 6, or 8 Hangman lives." };
+  if (Object.hasOwn(updates, "hangmanSeconds") && !hangman.HANGMAN_TIMES.includes(updates.hangmanSeconds)) return { ok: false, message: "Choose a supported Hangman timer." };
+  if (Object.hasOwn(updates, "hangmanDifficulty") && !DIFFICULTIES.includes(updates.hangmanDifficulty)) return { ok: false, message: "Choose a Hangman word difficulty." };
+  if (Object.hasOwn(updates, "hangmanRewardMultiplier") && !hangman.HANGMAN_MULTIPLIERS.includes(updates.hangmanRewardMultiplier)) return { ok: false, message: "Choose a Hangman reward multiplier." };
+  if (Object.hasOwn(updates, "hangmanWords") && !hangman.HANGMAN_WORDS_OPTIONS.includes(updates.hangmanWords)) return { ok: false, message: "Choose 1, 3, 5, 8, 10, or 15 Hangman words." };
+  if (Object.hasOwn(updates, "hangmanPurchases") && typeof updates.hangmanPurchases !== "boolean") return { ok: false, message: "Hangman purchases must be on or off." };
+  if (Object.hasOwn(updates, "hangmanAttacks") && typeof updates.hangmanAttacks !== "boolean") return { ok: false, message: "Hangman attacks must be on or off." };
+  if (Object.hasOwn(updates, "cashEventsEnabled") && typeof updates.cashEventsEnabled !== "boolean") return { ok: false, message: "Cash-powered events must be on or off." };
+  if (Object.hasOwn(updates, "hangmanCategories")) {
+    if (!Array.isArray(updates.hangmanCategories) || updates.hangmanCategories.some((category) => !hangman.HANGMAN_CATEGORIES.includes(category))) return { ok: false, message: "Choose Hangman categories from the word list." };
+    next.hangmanCategories = [...new Set(updates.hangmanCategories)];
+  }
   if (Object.hasOwn(updates, "events")) {
     if (!updates.events || typeof updates.events !== "object" || Array.isArray(updates.events)) return { ok: false, message: "Choose valid events." };
     for (const [key, value] of Object.entries(updates.events)) {
@@ -604,7 +673,7 @@ function applySettingsUpdate(current, updates, limits) {
       next.events[key] = value;
     }
   }
-  for (const key of ["startingCash", "questionCount", "difficulty", "betSeconds", "questionSeconds", "resultsSeconds", "eliminateAtZero"]) {
+  for (const key of ["startingCash", "questionCount", "difficulty", "betSeconds", "questionSeconds", "resultsSeconds", "eliminateAtZero", "hangmanLives", "hangmanSeconds", "hangmanDifficulty", "hangmanRewardMultiplier", "hangmanWords", "hangmanPurchases", "hangmanAttacks", "cashEventsEnabled"]) {
     if (Object.hasOwn(updates, key)) next[key] = updates[key];
   }
   return { ok: true, settings: next };
@@ -618,6 +687,9 @@ module.exports = {
   EVENT_LABELS,
   DIFFICULTIES,
   CATEGORIES,
+  QUESTION_TYPES,
+  QUESTION_TYPE_IDS,
+  questionKind,
   BET_TIMES,
   QUESTION_TIMES,
   RESULT_TIMES,

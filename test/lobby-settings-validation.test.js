@@ -40,11 +40,29 @@ test('published default lobby settings are valid, including display fields and z
   assert.equal(Object.values(cleared.settings.events).every((enabled) => enabled === false), true);
   assert.notEqual(cleared.message, BLOCKED);
 
-  const unknown = rules.applySettingsUpdate(defaults, { questionTypes: ['multiple'], powerups: [] }, LIMITS);
+  const unknown = rules.applySettingsUpdate(defaults, { powerups: [], minPlayers: 1 }, LIMITS);
   assert.equal(unknown.ok, false);
-  assert.match(unknown.message, /questionTypes/);
   assert.match(unknown.message, /powerups/);
+  assert.match(unknown.message, /minPlayers/);
   assert.notEqual(unknown.message, BLOCKED);
+  const typed = rules.applySettingsUpdate(defaults, { categories: ['Science'], questionTypes: ['WHO'] }, LIMITS);
+  assert.equal(typed.ok, true, typed.message);
+  assert.deepEqual(typed.settings.categories, ['Science']);
+  assert.deepEqual(typed.settings.questionTypes, ['WHO']);
+  const badType = rules.applySettingsUpdate(defaults, { questionTypes: ['ESSAY'] }, LIMITS);
+  assert.equal(badType.ok, false);
+  assert.match(badType.message, /question type/i);
+});
+
+test('selected question types and categories narrow the question bank', () => {
+  const { questions } = require('../questions');
+  const historyWho = rules.questionPool(questions, new Set(), { ...rules.defaultSettings(10), categories: ['History'], questionTypes: ['WHO'] }, 1);
+  assert.ok(historyWho.length > 0);
+  assert.ok(historyWho.every((question) => question.category === 'History' && rules.questionKind(question) === 'WHO'));
+  const science = rules.questionPool(questions, new Set(), { ...rules.defaultSettings(10), categories: ['Science'] }, 1);
+  assert.ok(science.every((question) => question.category === 'Science'));
+  const kinds = new Set(questions.map((question) => rules.questionKind(question)));
+  for (const [id] of rules.QUESTION_TYPES) assert.equal(kinds.has(id), true, id);
 });
 
 async function freePort() {
@@ -145,10 +163,14 @@ test('default lobby settings can start, and unknown settings name the bad fields
   const cleared = await guest.next((message) => message.type === 'STATE' && message.room.settings.events.JACKPOT === false);
   assert.equal(Object.values(cleared.room.settings.events).every((enabled) => enabled === false), true);
 
-  host.send('UPDATE_SETTINGS', { settings: { questionTypes: ['multiple'], powerups: ['shield'] } });
+  host.send('UPDATE_SETTINGS', { settings: { categories: ['Science'], questionTypes: ['WHO'] } });
+  const chosen = await guest.next((message) => message.type === 'STATE' && message.room.settings.questionTypes?.[0] === 'WHO');
+  assert.deepEqual(chosen.room.settings.categories, ['Science']);
+  assert.deepEqual(chosen.room.settings.questionTypes, ['WHO']);
+  host.send('UPDATE_SETTINGS', { settings: { powerups: ['shield'], minPlayers: 1 } });
   const rejected = await host.next((message) => message.type === 'ERROR' && message.code === 'INVALID_SETTINGS');
-  assert.match(rejected.message, /questionTypes/);
   assert.match(rejected.message, /powerups/);
+  assert.match(rejected.message, /minPlayers/);
   assert.notEqual(rejected.message, BLOCKED);
 
   host.send('START');
