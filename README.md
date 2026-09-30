@@ -32,3 +32,32 @@ npm test
 The test suite covers the standalone game rules, question-bank validation, room creation/joining, reconnects, host settings and kicks, room switching, bet validation and locking, answer scoring, and the final winner. Some integration tests use a fast one-round local server. To run the normal game, use `npm run dev` without `RISKIT_TEST_FAST=1`.
 
 No external trivia API, database, account system, or secrets are required.
+
+## Production
+
+The site and the multiplayer server are the same Node process. `npm start` runs `node server.js`. There is no compile step and no database. Do not put this server on a serverless host such as Vercel; the WebSocket connection has to stay open. Render can host it from `render.yaml` as one web service. Keep `numInstances` at 1, because rooms live in memory.
+
+The browser opens its WebSocket on the same host it loaded, using `wss://` when the page is HTTPS. Players in one room do not share sockets with another room.
+
+```text
+[x] GitHub repository updated
+[x] Production environment variables documented
+[ ] PostgreSQL database created (not used by this server)
+[ ] Prisma migrations ready (no Prisma schema)
+[x] Frontend and backend are one Node service
+[x] WebSocket production URL uses the page host
+[x] CORS not required (same origin)
+[ ] Authentication configured (not implemented)
+[x] Server starts with npm start (no compile step)
+[x] Tests pass
+[ ] Chat works (filter exists; chat is not in the game yet)
+[x] Multiplayer covered by automated tests
+[x] Two clients can join the same room in tests
+[x] Host controls covered by tests
+[x] Game settings synchronize in tests
+[x] A game can complete in tests
+[ ] Production database works (not used)
+[ ] Host service created (not deployed yet)
+```
+
+PostgreSQL, Prisma, accounts, and live chat are not part of this server. Chat filtering exists in `chat-filter.js` but the game does not send chat yet. The database boxes stay open because there is nothing to migrate. Deploy the Node service, then attach a custom domain on that host. Do not set `RISKIT_TEST_FAST=1` in production.

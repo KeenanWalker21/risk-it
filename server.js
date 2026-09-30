@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 const { questions } = require('./questions');
 
 const PORT = Number(process.env.PORT || 3000);
-const FAST_TEST = process.env.RISKIT_TEST_FAST === '1';
+const FAST_TEST = process.env.NODE_ENV !== 'production' && process.env.RISKIT_TEST_FAST === '1';
 const BET_SECONDS = FAST_TEST ? 1 : 10;
 const QUESTION_SECONDS = FAST_TEST ? 1 : 15;
 const RESULTS_SECONDS = FAST_TEST ? 1 : 5;
