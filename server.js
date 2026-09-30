@@ -7,6 +7,7 @@ const { createChatGuard } = require('./chat-filter');
 const { createAccountStore } = require('./accounts');
 const rules = require('./match-rules');
 const hangman = require('./hangman');
+const animations = require('./public/animations/registry');
 
 const PORT = Number(process.env.PORT || 3000);
 const FAST_TEST = process.env.NODE_ENV !== 'production' && process.env.RISKIT_TEST_FAST === '1';
@@ -64,6 +65,34 @@ function broadcast(room) {
   for (const player of room.players.values()) if (player.socket && !player.socket.closed) send(player.socket, { type: 'STATE', room: publicRoom(room, player.id) });
 }
 function event(room, type, detail = {}) { room.lastEvent = { type, noticeId: crypto.randomBytes(4).toString('hex'), ...detail }; broadcast(room); }
+function cue(room, input) {
+  const animation = animations.buildCue(input || {});
+  if (!animation) return null;
+  for (const player of room.players.values()) if (player.socket && !player.socket.closed) send(player.socket, { type: 'ANIMATION', animation });
+  return animation;
+}
+function roundCue(room) {
+  const state = room.roundState;
+  if (!state?.id || !animations.EVENT_ANIMATIONS[state.id]) return;
+  const players = rules.listPlayers(room);
+  const named = (id) => players.find((player) => player.id === id);
+  const input = { type: state.id, description: state.detail || undefined, metadata: {} };
+  if (state.jackpotAmount) input.amount = state.jackpotAmount;
+  if (state.id === 'CASH_DROP') input.amount = 250;
+  if (state.heist) {
+    input.playerId = state.heist.thiefId; input.playerName = named(state.heist.thiefId)?.name || null;
+    input.targetPlayerId = state.heist.victimId; input.targetName = named(state.heist.victimId)?.name || null;
+  }
+  if (state.steal) {
+    input.playerId = state.steal.thiefId; input.playerName = named(state.steal.thiefId)?.name || null;
+    input.targetPlayerId = state.steal.victimId; input.targetName = named(state.steal.victimId)?.name || null;
+  }
+  const marked = state.crownId || state.bountyId;
+  if (marked && (state.id === 'BOUNTY' || state.id === 'KINGS_CROWN' || state.id === 'TAX_COLLECTOR')) {
+    input.targetPlayerId = marked; input.targetName = named(marked)?.name || null;
+  }
+  cue(room, input);
+}
 function connectedPlayers(room) { return [...room.players.values()].filter(p => p.connected); }
 function enterPhase(room, phase, seconds) {
   clearTimeout(room.timer); room.phase = phase; room.deadline = Date.now() + seconds * 1000;
@@ -87,6 +116,7 @@ function startRound(room) {
   if (eventId) {
     const keepLightning = room.roundState.lightning;
     if (!rules.applyEvent(room, eventId)) { room.roundState = rules.blankRoundState(); room.roundState.lightning = keepLightning; }
+    else roundCue(room);
   }
   rules.markRoundParticipation(room);
   if (!rules.anyoneCanPlay(room)) return finishGame(room);
@@ -105,6 +135,12 @@ function advance(room) {
     enterPhase(room, 'QUESTION', clock.question); event(room, 'QUESTION_STARTED', { round: room.round });
   } else if (room.phase === 'QUESTION') {
     rules.scoreRound(room);
+    for (const scored of rules.listPlayers(room)) {
+      if (!scored.change) continue;
+      const jackpotWin = room.roundState?.jackpotAmount && scored.change === room.roundState.jackpotAmount && scored.correct;
+      if (jackpotWin) cue(room, { type: 'JACKPOT', playerId: scored.id, playerName: scored.name, amount: scored.change, description: `${scored.name} claimed the jackpot.` });
+      else cue(room, { type: scored.change > 0 ? 'CASH_GAIN' : 'CASH_LOSS', playerId: scored.id, playerName: scored.name, amount: Math.abs(scored.change) });
+    }
     const clock = rules.timings(room.settings, room.roundState, FAST_TEST);
     enterPhase(room, 'RESULTS', clock.results); event(room, 'ROUND_ENDED', { round: room.round });
   } else if (room.phase === 'RESULTS') {
@@ -150,7 +186,11 @@ function startHangmanRound(room) {
   event(room, 'HANGMAN_STARTED', { round: room.round });
 }
 function validClientId(value) { return typeof value === 'string' && /^[a-f0-9-]{32,36}$/i.test(value) ? value : null; }
-function reject(socket, code, message) { send(socket, { type: 'ERROR', code, message }); }
+function reject(socket, code, message) {
+  send(socket, { type: 'ERROR', code, message });
+  const animation = animations.failureCue(code, message);
+  if (animation) send(socket, { type: 'ANIMATION', animation });
+}
 function sanitizeName(input) {
   if (typeof input !== 'string') return null;
   const name = input.trim().replace(/[<>\u0000-\u001f]/g, '').slice(0, 18);
@@ -294,6 +334,15 @@ function handleMessage(socket, raw) {
     const shared = result.message.startsWith('You solved') ? `${player.name} solved the word.` : msg.type === 'HANGMAN_GUESS' ? `${player.name} guessed a letter.` : msg.type === 'HANGMAN_HINT' ? `${player.name} bought a hint.` : msg.type === 'HANGMAN_LETTER' ? `${player.name} bought a letter.` : result.message;
     event(room, msg.type, { message: shared });
     send(socket, { type: 'NOTICE', message: result.message });
+    const who = { playerId: player.id, playerName: player.name };
+    if (msg.type === 'HANGMAN_HINT') cue(room, { ...who, type: 'BUY_HINT' });
+    if (msg.type === 'HANGMAN_LETTER') cue(room, { ...who, type: 'BUY_LETTER' });
+    if (msg.type === 'HANGMAN_ATTACK' && target) {
+      cue(room, { ...who, type: 'REMOVE_LIFE', targetPlayerId: target.id, targetName: target.name });
+      if (target.puzzle?.lives <= 0) cue(room, { type: 'ELIMINATED', playerId: target.id, playerName: target.name });
+    }
+    if (result.solved) cue(room, { ...who, type: 'WORD_SOLVED', amount: result.reward, metadata: { place: result.place } });
+    else if (msg.type === 'HANGMAN_GUESS' && result.lives === 0) cue(room, { ...who, type: 'ELIMINATED' });
     if (room.phase === 'HANGMAN' && hangman.hangmanSettled(room)) advance(room);
     return;
   }
@@ -301,7 +350,9 @@ function handleMessage(socket, raw) {
     const target = typeof msg.targetId === 'string' ? room.players.get(msg.targetId) : null;
     const result = hangman.purchaseEvent(room, player, msg.eventId, target, (max) => crypto.randomInt(max));
     if (!result.ok) return reject(socket, result.error, result.message);
-    event(room, 'EVENT_PURCHASED', { message: result.message }); return;
+    event(room, 'EVENT_PURCHASED', { message: result.message });
+    if (result.cue) cue(room, result.cue);
+    return;
   }
   if (msg.type === 'CHAT') {
     if (!room.chatGuard) room.chatGuard = createChatGuard();

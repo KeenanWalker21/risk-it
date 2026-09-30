@@ -55,6 +55,7 @@
         room = data.room; roomReceivedAt = Date.now(); render(); return;
       }
       if (data.type === 'NOTICE') { notify(data.message || ''); return; }
+      if (data.type === 'ANIMATION') { window.RiskItStage?.play(data.animation); return; }
       if (data.type === 'STATE') { settingsNotice = '';
         room = data.room; roomReceivedAt = Date.now();
         const notice = room.lastEvent?.message;

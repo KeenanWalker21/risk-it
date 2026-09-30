@@ -191,11 +191,11 @@ function guessLetter(room, player, raw) {
   if (word.includes(letter)) {
     revealLetter(player.puzzle, word, letter);
     if (player.puzzle.solved) awardSolve(room, player);
-    return { ok: true, message: player.puzzle.solved ? `You solved it for $${player.change.toLocaleString("en-US")}.` : `${letter} is in the word.` };
+    return { ok: true, solved: player.puzzle.solved, reward: player.puzzle.solved ? player.change : 0, place: player.puzzle.place, lives: player.puzzle.lives, message: player.puzzle.solved ? `You solved it for $${player.change.toLocaleString("en-US")}.` : `${letter} is in the word.` };
   }
   player.puzzle.wrong.push(letter);
   player.puzzle.lives -= 1;
-  return { ok: true, message: player.puzzle.lives > 0 ? `${letter} is not in the word.` : "That miss used your last life. You can watch the rest of the race." };
+  return { ok: true, solved: false, reward: 0, place: null, lives: player.puzzle.lives, message: player.puzzle.lives > 0 ? `${letter} is not in the word.` : "That miss used your last life. You can watch the rest of the race." };
 }
 
 function awardSolve(room, player) {
@@ -229,7 +229,7 @@ function buyLetter(room, player, randomInt) {
   player.puzzle.guessed.push(letter);
   revealLetter(player.puzzle, room.puzzle.word, letter);
   if (player.puzzle.solved) awardSolve(room, player);
-  return { ok: true, message: player.puzzle.solved ? `You solved it for $${player.change.toLocaleString("en-US")}.` : `The table revealed ${letter}.` };
+  return { ok: true, solved: player.puzzle.solved, reward: player.puzzle.solved ? player.change : 0, place: player.puzzle.place, lives: player.puzzle.lives, message: player.puzzle.solved ? `You solved it for $${player.change.toLocaleString("en-US")}.` : `${letter} locked onto your board.` };
 }
 
 function attackLife(room, attacker, target) {
@@ -291,12 +291,12 @@ function applyPurchasedEffect(room, player, eventId, target, randomInt) {
   if (eventId === "DOUBLE_DOWN") {
     if (player.pendingDouble) return { ok: false, error: "DUPLICATE_PURCHASE", message: "Double Down is already waiting." };
     player.pendingDouble = true;
-    return { ok: true, message: "Double Down activated." };
+    return { ok: true, message: "Double Down activated.", metadata: { multiplier: 2 } };
   }
   if (eventId === "CASH_DROP") {
     if (player.pendingDrop) return { ok: false, error: "DUPLICATE_PURCHASE", message: "A cash drop is already waiting on your next correct answer." };
     player.pendingDrop = 150;
-    return { ok: true, message: "Cash Drop activated. Your next correct answer pays an extra $150." };
+    return { ok: true, message: "Cash Drop activated. Your next correct answer pays an extra $150.", amount: 150, metadata: { pending: true } };
   }
   if (eventId === "FINAL_GAMBLE") {
     if (player.pendingGamble) return { ok: false, error: "DUPLICATE_PURCHASE", message: "Final Gamble is already armed." };
@@ -314,18 +314,21 @@ function applyPurchasedEffect(room, player, eventId, target, randomInt) {
     const moved = Math.min(target.balance, amount);
     target.balance -= moved;
     player.balance += moved;
-    return { ok: true, message: `${player.name} lifted $${moved} from ${target.name}.` };
+    return { ok: true, message: `${player.name} lifted $${moved} from ${target.name}.`, amount: moved, targetId: target.id, targetName: target.name };
   }
   if (eventId === "BOUNTY" || eventId === "STEAL") {
     if (room.settings?.gameMode === "HANGMAN" || !room.roundState) return { ok: false, error: "WRONG_PHASE", message: "That event belongs on a trivia round." };
     if (!target || target.id === player.id) return { ok: false, error: "INVALID_TARGET", message: "Choose another player." };
     if (eventId === "BOUNTY") room.roundState.bountyId = target.id;
     else room.roundState.steal = { thiefId: player.id, victimId: target.id };
-    return { ok: true, message: eventId === "BOUNTY" ? `Bounty placed on ${target.name}.` : `Steal Chance aimed at ${target.name}.` };
+    return { ok: true, message: eventId === "BOUNTY" ? `Bounty placed on ${target.name}.` : `Steal Chance aimed at ${target.name}.`, targetId: target.id, targetName: target.name };
   }
   if (eventId === "CHAOS") {
     const options = room.settings?.gameMode === "HANGMAN" ? ["LIGHTNING"] : ["DOUBLE_DOWN", "CASH_DROP", "LIGHTNING", "FINAL_GAMBLE"];
-    return applyPurchasedEffect(room, player, options[randomInt(options.length)], null, randomInt);
+    const picked = options[randomInt(options.length)];
+    const inner = applyPurchasedEffect(room, player, picked, null, randomInt);
+    if (!inner.ok) return inner;
+    return { ok: true, message: `Chaos Round: ${inner.message}`, amount: inner.amount, targetId: inner.targetId, targetName: inner.targetName, metadata: { ...(inner.metadata || {}), effect: picked } };
   }
   return { ok: false, error: "UNKNOWN_EVENT", message: "That event cannot be bought." };
 }
@@ -343,7 +346,20 @@ function purchaseEvent(room, player, eventId, target, randomInt) {
   const effect = applyPurchasedEffect(room, player, eventId, target, randomInt);
   if (!effect.ok) { player.balance += cost; player.change = (player.change || 0) + cost; return effect; }
   room.purchased.add(key);
-  return { ok: true, message: `${effect.message} $${player.balance.toLocaleString("en-US")} remaining.` };
+  return {
+    ok: true,
+    message: `${effect.message} $${player.balance.toLocaleString("en-US")} remaining.`,
+    cue: {
+      type: eventId,
+      playerId: player.id,
+      playerName: player.name,
+      targetPlayerId: effect.targetId || null,
+      targetName: effect.targetName || null,
+      amount: Number.isFinite(effect.amount) ? effect.amount : null,
+      metadata: effect.metadata || {},
+      description: effect.message,
+    },
+  };
 }
 
 module.exports = {

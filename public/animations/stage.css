@@ -1,0 +1,55 @@
+.anim-root{position:fixed;inset:0;z-index:30;pointer-events:none;overflow:hidden}
+.anim-mute{pointer-events:auto;position:fixed;top:14px;right:14px;z-index:31;background:#151a22;color:#e8ebf0;border:1px solid #2b303a;border-radius:3px;padding:8px 10px;font:10px 'DM Mono',monospace;letter-spacing:.08em}
+.anim-floats{position:fixed;top:72px;right:16px;display:flex;flex-direction:column;gap:8px;width:min(280px,calc(100vw - 24px));z-index:32}
+.anim-major{position:fixed;inset:0;display:grid;place-items:center;padding:16px}
+.anim-card{width:min(460px,calc(100vw - 28px));max-height:calc(100vh - 32px);overflow:auto;background:#121722ee;border:1px solid #3c4a2c;border-radius:8px;color:#f5f6f8;box-shadow:0 18px 50px #000a;padding:18px 18px 16px}
+.anim-card.modest{padding:12px 14px}
+.anim-card.cinematic{width:min(640px,calc(100vw - 24px));background:#0c1018f2;border-color:#c8f169}
+.anim-major:has(.cinematic){background:#07090ee6;pointer-events:auto}
+.anim-card strong{display:block;font-size:clamp(22px,4vw,40px);letter-spacing:-.04em;line-height:1}
+.anim-card p{margin:8px 0 0;color:#c5ccd6;font-size:14px;line-height:1.4}
+.anim-line{margin:8px 0 0;font:12px 'DM Mono',monospace;color:#f5f6f8}
+.anim-line span{color:#8a909e;margin-right:6px}
+.anim-card em{display:block;margin-top:10px;color:#c8f169;font:20px 'DM Mono',monospace;font-style:normal}
+.anim-card small{display:block;margin-top:6px;color:#f1c36e;font:11px 'DM Mono',monospace}
+.anim-scene{height:72px;margin-bottom:8px;position:relative;overflow:hidden}
+.anim-card.modest .anim-scene{height:36px}
+.coins i,.burst i{position:absolute;top:-12px;left:calc(var(--i) * 12%);width:10px;height:10px;border-radius:50%;background:#c8f169;animation:coin-fall 1.1s ease-in calc(var(--i) * 40ms) both}
+.burst i{background:#f1c36e;border-radius:2px}
+.vault{display:flex;justify-content:center;align-items:flex-end;gap:8px}
+.vault b{width:34px;height:42px;background:#243044;border:2px solid #c8f169;border-radius:4px;animation:vault-shake .4s linear 3}
+.bolt{background:linear-gradient(90deg,transparent,#c8f169,transparent);height:4px;margin-top:30px;animation:flash .35s linear 3}
+.crosshair{width:54px;height:54px;margin:8px auto;border:2px solid #ff8d79;border-radius:50%;animation:lock-on .6s ease both}
+.crosshair:before,.crosshair:after{content:"";position:absolute;background:#ff8d79}
+.crosshair:before{left:50%;top:-6px;bottom:-6px;width:2px}
+.crosshair:after{top:50%;left:-6px;right:-6px;height:2px}
+.multiplier,.wager,.tile{display:grid;place-items:center;font:32px 'DM Mono',monospace;color:#c8f169;animation:flip-in .45s ease both}
+.chaos span{position:absolute;font-size:28px;animation:cycle 1.2s linear infinite}
+.chaos span:nth-child(2){left:42%}.chaos span:nth-child(3){left:70%}
+.crown{text-align:center;font-size:42px;color:#f1c36e;animation:drop-in .5s ease both}
+.bills i{position:absolute;top:24px;height:8px;width:28px;background:#c8f169;border-radius:2px;animation:slide-cash .8s ease both}
+.bills i:nth-child(2){top:36px}.bills i:nth-child(3){top:12px}
+.shield{width:46px;height:54px;margin:8px auto;border:2px solid #c8f169;border-radius:24px 24px 16px 16px;box-shadow:0 0 18px #c8f16955}
+.glass{width:28px;height:28px;margin:16px auto;border:3px solid #c8f169;border-radius:50%;position:relative;animation:scan 1s ease both}
+.glass:after{content:"";position:absolute;width:12px;height:3px;background:#c8f169;right:-10px;bottom:-2px;transform:rotate(40deg)}
+.heart{text-align:center;font-size:36px;color:#ff8d79;animation:crack .45s ease both}
+.drop{text-align:center;font-size:36px;color:#ff8d79}
+@keyframes coin-fall{to{top:64px;opacity:.2;transform:rotate(180deg)}}
+@keyframes vault-shake{25%{transform:translateX(-2px)}75%{transform:translateX(2px)}}
+@keyframes flash{50%{opacity:.2}}
+@keyframes lock-on{from{transform:scale(1.4);opacity:0}}
+@keyframes flip-in{from{transform:rotateY(80deg);opacity:0}}
+@keyframes cycle{50%{opacity:.25;transform:translateY(-6px)}}
+@keyframes drop-in{from{transform:translateY(-30px);opacity:0}}
+@keyframes slide-cash{from{transform:translateX(-40px);opacity:0}to{transform:translateX(40px)}}
+@keyframes scan{from{transform:translateX(-30px)}to{transform:translateX(30px)}}
+@keyframes crack{40%{transform:scale(1.15)}to{opacity:.35;transform:scale(.7)}}
+.anim-calm .anim-scene,.anim-calm .anim-scene *{animation:none!important}
+@media (prefers-reduced-motion: reduce){
+  .anim-scene,.anim-scene *{animation:none!important}
+}
+@media (max-width:650px){
+  .anim-mute{top:8px;right:8px}
+  .anim-floats{top:58px;right:8px}
+  .anim-card strong{font-size:28px}
+}
