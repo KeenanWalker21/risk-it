@@ -14,9 +14,9 @@ const CATEGORIES = [
   "Geography",
 ];
 
-test("question bank has at least 50 playable questions", () => {
+test("question bank has at least 300 playable questions", () => {
   assert.ok(Array.isArray(questions));
-  assert.ok(questions.length >= 50);
+  assert.ok(questions.length >= 300);
 });
 
 test("every question has a unique id, four answers, and a valid key", () => {

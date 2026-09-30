@@ -38,7 +38,7 @@ test('hangman rewards, costs, and mode descriptions stay explicit', () => {
   assert.equal(hangman.WORDS.find((entry) => entry.word === 'AVENGERS').category, 'Movies');
   for (const entry of hangman.WORDS) assert.ok(hangman.HANGMAN_CATEGORIES.includes(entry.category), entry.word);
   assert.equal(new Set(hangman.WORDS.map((entry) => entry.word)).size, hangman.WORDS.length);
-  assert.ok(hangman.WORDS.length >= 15);
+  assert.ok(hangman.WORDS.length >= 300);
   const slogan = hangman.blankPuzzle(6);
   const board = hangman.viewerHangman({
     phase: 'HANGMAN',
