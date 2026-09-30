@@ -3,6 +3,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { questions } = require('./questions');
+const { createChatGuard } = require('./chat-filter');
+const { createAccountStore } = require('./accounts');
 
 const PORT = Number(process.env.PORT || 3000);
 const FAST_TEST = process.env.NODE_ENV !== 'production' && process.env.RISKIT_TEST_FAST === '1';
@@ -16,6 +18,9 @@ const QUESTION_COUNT_OPTIONS = FAST_TEST ? [1, 5, 10, 15, 20, 25] : [5, 10, 15, 
 const DEFAULT_SETTINGS = { startingCash: 1000, questionCount: ROUNDS, gameMode: 'CLASSIC' };
 const rooms = new Map();
 const clients = new Set();
+let accountStore = null;
+try { accountStore = createAccountStore(); }
+catch (error) { console.error('Accounts storage failed to open'); }
 
 function id() { return crypto.randomBytes(16).toString('hex'); }
 function roomCode() {
@@ -38,6 +43,7 @@ function publicRoom(room, viewerId) {
     question: q && room.phase !== 'BETTING' ? { id: q.id, question: q.question, answers: q.answers, category: q.category, difficulty: q.difficulty } : (q ? { category: q.category, difficulty: q.difficulty } : null),
     result: room.phase === 'RESULTS' ? { correctAnswer: q.correctAnswer, correctText: q.answers[q.correctAnswer] } : null,
     winnerId: room.phase === 'FINAL' ? sortedPlayers(room)[0]?.id : null,
+    chat: room.chat || [],
     lastEvent: room.lastEvent || null
   };
 }
@@ -89,17 +95,56 @@ function sanitizeName(input) {
   const name = input.trim().replace(/[<>\u0000-\u001f]/g, '').slice(0, 18);
   return name.length >= 1 ? name : null;
 }
+const ACCOUNT_MESSAGES = {
+  INVALID_USERNAME: 'Usernames are 3–16 letters, numbers, or underscores.',
+  INVALID_EMAIL: 'Enter a valid email address.',
+  WEAK_PASSWORD: 'Passwords need 8 to 72 characters.',
+  USERNAME_TAKEN: 'That username is already taken.',
+  EMAIL_TAKEN: 'That email is already registered.',
+  BAD_LOGIN: 'Username or password is incorrect.',
+  ACCOUNT_UNAVAILABLE: 'Accounts are unavailable right now. You can still play as a guest.',
+};
+function handleAccount(socket, msg) {
+  if (!accountStore) return reject(socket, 'ACCOUNT_UNAVAILABLE', ACCOUNT_MESSAGES.ACCOUNT_UNAVAILABLE);
+  try {
+    if (msg.type === 'SIGNUP' || msg.type === 'LOGIN') {
+      const result = msg.type === 'SIGNUP'
+        ? accountStore.signup({ username: msg.username, email: msg.email, password: msg.password })
+        : accountStore.login({ username: msg.username, password: msg.password });
+      if (!result.ok) return reject(socket, result.error, ACCOUNT_MESSAGES[result.error] || 'Account request failed.');
+      socket.account = result.user;
+      send(socket, { type: 'ACCOUNT', sessionToken: result.sessionToken, user: result.user });
+      return;
+    }
+    if (msg.type === 'LOGOUT') {
+      accountStore.logout(msg.sessionToken);
+      socket.account = null;
+      send(socket, { type: 'LOGGED_OUT' });
+      return;
+    }
+    if (msg.type === 'SESSION') {
+      const user = accountStore.session(msg.sessionToken);
+      socket.account = user;
+      if (!user) return send(socket, { type: 'LOGGED_OUT' });
+      send(socket, { type: 'ACCOUNT', user });
+    }
+  } catch (error) {
+    console.error('Account request failed');
+    reject(socket, 'ACCOUNT_UNAVAILABLE', ACCOUNT_MESSAGES.ACCOUNT_UNAVAILABLE);
+  }
+}
 function handleMessage(socket, raw) {
   let msg;
   try { msg = JSON.parse(raw); } catch { return reject(socket, 'BAD_JSON', 'That message was not valid JSON.'); }
   if (!msg || typeof msg.type !== 'string') return reject(socket, 'BAD_MESSAGE', 'Message type is required.');
+  if (msg.type === 'SIGNUP' || msg.type === 'LOGIN' || msg.type === 'LOGOUT' || msg.type === 'SESSION') return handleAccount(socket, msg);
 
   if (msg.type === 'CREATE') {
     const name = sanitizeName(msg.name); if (!name) return reject(socket, 'BAD_NAME', 'Choose a name between 1 and 18 characters.');
     if (socket.roomCode && socket.playerId) disconnect(socket, true);
     const code = roomCode(), playerId = id(), token = id(), clientId = validClientId(msg.clientId) || id();
-    const player = { id: playerId, token, clientId, name, balance: DEFAULT_SETTINGS.startingCash, score: 0, connected: true, bet: null, answer: null, correct: null, change: 0, socket };
-    const room = { code, phase: 'LOBBY', round: 0, deadline: null, hostId: playerId, players: new Map([[playerId, player]]), kickedTokens: new Set(), kickedClientIds: new Set(), settings: { ...DEFAULT_SETTINGS }, usedQuestions: new Set(), question: null, lastEvent: null };
+    const player = { id: playerId, token, clientId, name, userId: socket.account?.id || null, balance: DEFAULT_SETTINGS.startingCash, score: 0, connected: true, bet: null, answer: null, correct: null, change: 0, socket };
+    const room = { code, phase: 'LOBBY', round: 0, deadline: null, hostId: playerId, players: new Map([[playerId, player]]), kickedTokens: new Set(), kickedClientIds: new Set(), settings: { ...DEFAULT_SETTINGS }, usedQuestions: new Set(), question: null, chat: [], chatGuard: createChatGuard(), lastEvent: null };
     rooms.set(code, room); socket.playerId = playerId; socket.roomCode = code;
     send(socket, { type: 'WELCOME', token, playerId, clientId, room: publicRoom(room, playerId) }); return;
   }
@@ -115,11 +160,11 @@ function handleMessage(socket, raw) {
     let player = [...room.players.values()].find(p => typeof msg.token === 'string' && p.token === msg.token);
     if (player) {
       if (player.socket && player.socket !== socket) player.socket.close(1000, 'Reconnected elsewhere');
-      player.socket = socket; player.connected = true;
+      player.socket = socket; player.connected = true; if (socket.account?.id) player.userId = socket.account.id;
     } else {
       if (room.phase !== 'LOBBY') return reject(socket, 'GAME_IN_PROGRESS', 'This game has already started. Reconnect with your saved player token.');
       if (room.players.size >= MAX_PLAYERS) return reject(socket, 'ROOM_FULL', 'This room is full.');
-      player = { id: id(), token: id(), clientId: clientId || id(), name, balance: room.settings.startingCash, score: 0, connected: true, bet: null, answer: null, correct: null, change: 0, socket };
+      player = { id: id(), token: id(), clientId: clientId || id(), name, userId: socket.account?.id || null, balance: room.settings.startingCash, score: 0, connected: true, bet: null, answer: null, correct: null, change: 0, socket };
       room.players.set(player.id, player);
     }
     socket.playerId = player.id; socket.roomCode = code;
@@ -176,6 +221,24 @@ function handleMessage(socket, raw) {
     if (player.answer !== null) return reject(socket, 'ANSWER_LOCKED', 'Your answer is already locked.');
     if (!Number.isInteger(msg.answer) || msg.answer < 0 || msg.answer > 3) return reject(socket, 'INVALID_ANSWER', 'Choose one of the four answers.');
     player.answer = msg.answer; event(room, 'PLAYER_ANSWERED', { playerName: player.name }); finishEarlyIfReady(room); return;
+  }
+  if (msg.type === 'CHAT') {
+    if (!room.chatGuard) room.chatGuard = createChatGuard();
+    if (!room.chat) room.chat = [];
+    const accepted = room.chatGuard.accept({ playerId: player.id, text: msg.text });
+    if (!accepted.ok) {
+      const messages = {
+        EMPTY_MESSAGE: 'Type a message first.',
+        MESSAGE_TOO_LONG: 'Messages can be up to 200 characters.',
+        RATE_LIMITED: 'Slow down a little.',
+        SPAM: 'That message was already sent.',
+      };
+      return reject(socket, accepted.error, messages[accepted.error] || 'Message was not sent.');
+    }
+    room.chat.push({ id: id(), playerId: player.id, name: player.name, text: accepted.text, at: Date.now() });
+    if (room.chat.length > 40) room.chat.shift();
+    event(room, 'CHAT_MESSAGE', { playerName: player.name });
+    return;
   }
   if (msg.type === 'LEAVE') { disconnect(socket, true); return; }
   reject(socket, 'UNKNOWN_ACTION', 'That action is not available.');
